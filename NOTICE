@@ -1,0 +1,14 @@
+EDT Form Update (this repository)
+=================================
+
+This project is a fork of:
+
+  EDT Form Update
+  https://github.com/Xelgo/edt-form-update-plugin
+  Copyright (c) Xelgo and contributors
+
+Licensed under the Eclipse Public License 2.0 (see LICENSE).
+
+Modifications for 1C:EDT 2026.1 / 2026.2 (OSGi Import-Package ranges,
+workspace-file compare fallback for Cyclic lazy links, Form/BaseForm id
+alignment after update) are Contributions under the same EPL-2.0 terms.
