@@ -9,5 +9,7 @@ target/
 #Report directories
 /reports
 */reports
-#Mac-specific directory that no other operating system needs.
-.DS_Storedist/
+#Mac-specific
+.DS_Store
+# Built plugin jars live in GitHub Releases, not in source tree
+dist/
