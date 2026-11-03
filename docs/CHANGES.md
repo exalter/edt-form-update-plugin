@@ -32,6 +32,19 @@ New `FormIdConsistency`:
 - Detects “crash pattern”: Form ids ≥ 1e6 while BaseForm keeps small parent ids
   (known trigger for `compileexttocfe --ibcmd` Segmentation fault).
 
+### 2026-11-03 — align must stick (BM overwrite)
+
+Earlier align used `URI.createFileURI` + a private `ResourceSetImpl`. EDT BM
+later rewrote BaseForm with parent ids → git still showed crash-pattern after
+`Updated: N. Failed: 0`.
+
+Now:
+
+- Load/save via **platform-resource URI** + `refreshLocal` before/after;
+  one retry if crash-pattern remains.
+- Remaining crash-pattern → **`CoreException`** → batch row **Failed** (not a
+  silent warning). Operator/agent runs `post_form_update_hygiene.py`.
+
 ## Docs
 
 - Russian README focused on 2026.x install and usage.

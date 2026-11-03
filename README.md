@@ -17,7 +17,9 @@ Upstream давно без релизов; на EDT 2026.2 стоковый пл
 2. Поиск adopted-форм, у которых форма в основной конфигурации изменилась.
 3. Таблица с выбором → пакетный **Update**.
 4. После каждого Update — выравнивание id Form → BaseForm (анти-segfault
-   `compileexttocfe --ibcmd`).
+   `compileexttocfe --ibcmd`): platform URI + refresh + retry; оставшийся
+   crash-pattern → **Failed**. Агент на диске всё равно гоняет
+   `post_form_update_hygiene.py` (Mac shortcuts + id + orphan).
 
 ## Доработки этого форка
 

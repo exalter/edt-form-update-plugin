@@ -36,7 +36,7 @@
 2. Добавьте одну строку (пути подставьте свои; `file:` URL, версия = из имени jar):
 
 ```text
-ru.xelgo.edt.formupdate.ui,1.0.2.v202611021700,file:/Users/<you>/.p2/pool/plugins/ru.xelgo.edt.formupdate.ui_1.0.2.v202611021700.jar,4,false
+ru.xelgo.edt.formupdate.ui,1.0.2.v202611031200,file:/Users/<you>/.p2/pool/plugins/ru.xelgo.edt.formupdate.ui_1.0.2.v202611031200.jar,4,false
 ```
 
 Формат: `symbolicName,version,location,startLevel,markedAsStarted`.
@@ -82,9 +82,11 @@ Bundle-Version + bundles.info.
 2. **Проект → Обновить формы расширения**.
 3. Выберите расширение → список кандидатов.
 4. Отметьте формы (Select all при необходимости) → **Update**.
-5. Дождитесь `Updated: N. Failed: 0.` в логе диалога.
-6. При необходимости проверьте Form/BaseForm id
-   (скрипт `check_form_baseform_ids.py` / crash-pattern у операторов).
+5. Дождитесь итога в логе. `Failed` по id crash-pattern — сигнал дожать
+   hygiene на диске (не «плагин сломан»).
+6. **Обязательно** после диалога:
+   `python3 …/edt-form-update/scripts/post_form_update_hygiene.py --cfe … [--cf …]`
+   → exit 0. Без этого не коммитить Form/BaseForm.
 
 ## Типичные сбои
 
@@ -94,7 +96,8 @@ Bundle-Version + bundles.info.
 | BundleException Import-Package | слишком узкий MANIFEST — нужен jar этого форка |
 | No updatable / Cyclic links | старый jar без file-compare fallback |
 | Секундный поиск, пусто | workspace без extension project или контекст ещё не готов |
-| Segfault ibcmd после Update | id-align не сработал — смотрите лог Form/BaseForm id align |
+| Segfault ibcmd после Update | `post_form_update_hygiene.py` / id-align; jar без platform-URI fix — пересобрать форк |
+| Failed на строке после Update + «crash-pattern remains» | hygiene на git-диске; пересобрать/поставить jar с 2026-11-03 align |
 
 ## Снятие плагина
 

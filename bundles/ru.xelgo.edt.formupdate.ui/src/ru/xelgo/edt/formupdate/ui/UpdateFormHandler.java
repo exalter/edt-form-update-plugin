@@ -155,8 +155,10 @@ public class UpdateFormHandler
                 logInfo("Updating candidate started. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
                     candidate.getFormName());
                 modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
+                // Must throw on remaining crash-pattern → BatchUpdate marks Failed
+                // (file-URI align alone was overwritten by BM; platform URI + refresh).
                 alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
-                    candidate.getFormName());
+                    candidate.getFormName(), monitor);
                 logInfo("Updating candidate finished. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
                     candidate.getFormName());
             }
@@ -516,48 +518,80 @@ public class UpdateFormHandler
     /**
      * After updateAdopted: copy Form attribute/command ids onto BaseForm when they diverge
      * (extension-range ids on Form vs parent ids on BaseForm → ibcmd segfault).
+     * <p>
+     * Uses platform-resource URIs (same workspace as EDT BM), refreshes before/after, and
+     * retries once. Remaining crash-pattern throws so the batch row is Failed — operators
+     * then run {@code post_form_update_hygiene.py} / {@code align_form_baseform_ids.py}.
      */
-    private void alignFormBaseFormIdsAfterUpdate(IExtensionProject extensionProject, String ownerName, String formName)
+    private void alignFormBaseFormIdsAfterUpdate(IExtensionProject extensionProject, String ownerName, String formName,
+        IProgressMonitor monitor) throws CoreException
     {
+        String ownerSimple = getOwnerSimpleName(ownerName);
+        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+            false);
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+            true);
+        if (formResource == null || baseFormResource == null)
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
+                MessageFormat.format(
+                    "Form/BaseForm id align skipped (workspace files missing). Owner: {0}, form: {1}", //$NON-NLS-1$
+                    ownerName, formName)));
+        }
+
+        formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+
+        FormIdConsistency.Result result;
         try
         {
-            String ownerSimple = getOwnerSimpleName(ownerName);
-            IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
-                false);
-            IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
-                true);
-            if (formResource == null || formResource.getLocation() == null || baseFormResource == null
-                || baseFormResource.getLocation() == null)
-            {
-                logWarning(
-                    "Form/BaseForm id align skipped (workspace files missing). Owner: {0}, form: {1}", //$NON-NLS-1$
-                    ownerName, formName);
-                return;
-            }
-            ResourceSet resourceSet = new ResourceSetImpl();
-            URI formUri = URI.createFileURI(formResource.getLocation().toOSString());
-            URI baseUri = URI.createFileURI(baseFormResource.getLocation().toOSString());
-            Resource formRes = resourceSet.getResource(formUri, true);
-            Resource baseRes = resourceSet.getResource(baseUri, true);
-            Form form = formRes.getContents().isEmpty() ? null : (Form)formRes.getContents().get(0);
-            Form baseForm = baseRes.getContents().isEmpty() ? null : (Form)baseRes.getContents().get(0);
-            FormIdConsistency.Result result = FormIdConsistency.alignFormIdsOntoBaseForm(form, baseForm);
-            if (result.hadMismatch())
-                logWarning("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
-                    result.summary());
-            else
-                logInfo("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
-                    result.summary());
+            result = alignOnceViaPlatformUri(formResource, baseFormResource);
             if (result.stillMismatched() || result.isCrashPatternAfter())
-                logWarning(
-                    "Form/BaseForm id align incomplete (ibcmd may still segfault). Owner: {0}, form: {1}", //$NON-NLS-1$
-                    ownerName, formName);
+            {
+                // updateAdopted may flush BaseForm after first save — refresh and retry.
+                formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                result = alignOnceViaPlatformUri(formResource, baseFormResource);
+            }
         }
-        catch (RuntimeException | IOException e)
+        catch (IOException | RuntimeException e)
         {
-            logWarning("Form/BaseForm id align failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
-                e.toString());
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
+                MessageFormat.format("Form/BaseForm id align failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                    ownerName, formName, e.toString()),
+                e));
         }
+
+        if (result.hadMismatch())
+            logWarning("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
+                result.summary());
+        else
+            logInfo("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
+                result.summary());
+
+        if (result.stillMismatched() || result.isCrashPatternAfter())
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
+                MessageFormat.format(
+                    "Form/BaseForm id crash-pattern remains after align. Owner: {0}, form: {1}. " //$NON-NLS-1$
+                        + "Run post_form_update_hygiene.py / align_form_baseform_ids.py.", //$NON-NLS-1$
+                    ownerName, formName)));
+        }
+    }
+
+    private FormIdConsistency.Result alignOnceViaPlatformUri(IResource formResource, IResource baseFormResource)
+        throws IOException
+    {
+        // Platform URI keeps us on the workspace resource set path (BM-visible),
+        // unlike createFileURI which EDT later overwrote with parent ids.
+        URI formUri = URI.createPlatformResourceURI(formResource.getFullPath().toString(), true);
+        URI baseUri = URI.createPlatformResourceURI(baseFormResource.getFullPath().toString(), true);
+        ResourceSet resourceSet = new ResourceSetImpl();
+        Resource formRes = resourceSet.getResource(formUri, true);
+        Resource baseRes = resourceSet.getResource(baseUri, true);
+        Form form = formRes.getContents().isEmpty() ? null : (Form)formRes.getContents().get(0);
+        Form baseForm = baseRes.getContents().isEmpty() ? null : (Form)baseRes.getContents().get(0);
+        return FormIdConsistency.alignFormIdsOntoBaseForm(form, baseForm);
     }
 
     /**
