@@ -5,6 +5,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -168,27 +169,63 @@ public class UpdateFormHandler
                 boolean committed = false;
                 try
                 {
-                    modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
-                    if (monitor.isCanceled())
-                        throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
-                    // Refresh disk view after adopt (may truncate then rewrite BaseForm).
-                    if (formResource != null)
-                        formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                    if (baseFormResource != null)
-                        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                    guard.assertNonEmpty("updateAdopted"); //$NON-NLS-1$
-                    // Must throw on remaining crash-pattern → BatchUpdate marks Failed
-                    // (file-URI align alone was overwritten by BM; platform URI + refresh).
-                    alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
-                        candidate.getFormName(), monitor);
-                    if (formResource != null)
-                        formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                    if (baseFormResource != null)
-                        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                    guard.assertNonEmpty("id-align"); //$NON-NLS-1$
+                    boolean fileFallback = false;
+                    try
+                    {
+                        updateAdoptedWithCyclicRetry(modelObjectAdopter, candidate, extensionProject, monitor,
+                            formResource, baseFormResource);
+                    }
+                    catch (CoreException adoptError)
+                    {
+                        if (!isCyclicLazyLinks(adoptError))
+                        {
+                            guard.restore();
+                            throw adoptError;
+                        }
+                        // Full EMF adopt cannot resolve PictureRef/ColorRef cycles on EDT 2026.2+.
+                        // Restore snapshot, sync BaseForm from parent Form.form on disk, id-align.
+                        guard.restore();
+                        if (formResource != null)
+                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        if (baseFormResource != null)
+                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        logWarning(
+                            "Cyclic on updateAdopted after retry — BaseForm file sync from parent. Owner: {0}, form: {1}", //$NON-NLS-1$
+                            candidate.getOwnerName(), candidate.getFormName());
+                        syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
+                            candidate.getFormName(), monitor);
+                        alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
+                            candidate.getFormName(), monitor);
+                        if (formResource != null)
+                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        if (baseFormResource != null)
+                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        guard.assertNonEmpty("cyclic-file-fallback"); //$NON-NLS-1$
+                        candidate.setMessage("Updated (BaseForm file fallback)"); //$NON-NLS-1$
+                        fileFallback = true;
+                    }
+                    if (!fileFallback)
+                    {
+                        if (monitor.isCanceled())
+                            throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
+                        if (formResource != null)
+                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        if (baseFormResource != null)
+                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        guard.assertNonEmpty("updateAdopted"); //$NON-NLS-1$
+                        alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
+                            candidate.getFormName(), monitor);
+                        if (formResource != null)
+                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        if (baseFormResource != null)
+                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        guard.assertNonEmpty("id-align"); //$NON-NLS-1$
+                        candidate.setMessage(
+                            valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
+                    }
                     committed = true;
-                    logInfo("Updating candidate finished. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
-                        candidate.getFormName());
+                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}", //$NON-NLS-1$
+                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback));
                 }
                 catch (CoreException e)
                 {
@@ -660,6 +697,123 @@ public class UpdateFormHandler
         Form form = formRes.getContents().isEmpty() ? null : (Form)formRes.getContents().get(0);
         Form baseForm = baseRes.getContents().isEmpty() ? null : (Form)baseRes.getContents().get(0);
         return FormIdConsistency.alignFormIdsOntoBaseForm(form, baseForm);
+    }
+
+    /**
+     * EDT 2026.2+ often throws {@code AssertionError: Cyclic resolution of lazy links}
+     * inside {@code updateAdopted} for forms with PictureRef/ColorRef. Retry once after
+     * refresh; caller may then fall back to file sync of BaseForm.
+     */
+    private void updateAdoptedWithCyclicRetry(IModelObjectAdopter modelObjectAdopter, FormUpdateCandidate candidate,
+        IExtensionProject extensionProject, IProgressMonitor monitor, IResource formResource,
+        IResource baseFormResource) throws CoreException
+    {
+        Throwable last = null;
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
+                return;
+            }
+            catch (Throwable t)
+            {
+                last = t;
+                if (!isCyclicLazyLinks(t))
+                {
+                    if (t instanceof CoreException)
+                        throw (CoreException)t;
+                    if (t instanceof Error && !(t instanceof AssertionError))
+                        throw (Error)t;
+                    throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, t.toString(), t));
+                }
+                logWarning(
+                    "Cyclic resolution on updateAdopted attempt {0}. Owner: {1}, form: {2}, error: {3}", //$NON-NLS-1$
+                    Integer.valueOf(attempt), candidate.getOwnerName(), candidate.getFormName(), t.toString());
+                if (attempt >= 2)
+                    break;
+                if (formResource != null)
+                    formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                if (baseFormResource != null)
+                    baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                try
+                {
+                    Thread.sleep(250L);
+                }
+                catch (InterruptedException ie)
+                {
+                    Thread.currentThread().interrupt();
+                    throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update interrupted", ie)); //$NON-NLS-1$
+                }
+            }
+        }
+        throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
+            "CYCLIC_LAZY_LINKS: " + (last != null ? last.toString() : "unknown"), last)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * Copy parent configuration {@code Form.form} onto extension {@code BaseForm/Form.form}
+     * without EMF adopt. Keeps extension Form layer; refreshes vendor snapshot when Cyclic
+     * blocks {@code updateAdopted}.
+     */
+    private void syncBaseFormFromParentFile(IExtensionProject extensionProject, String ownerName, String formName,
+        IProgressMonitor monitor) throws CoreException
+    {
+        IV8Project parentProject = extensionProject.getParent();
+        if (parentProject == null || parentProject.getProject() == null)
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                "No parent project for BaseForm file sync. Owner: {0}, form: {1}", ownerName, formName))); //$NON-NLS-1$
+        }
+        String ownerSimple = getOwnerSimpleName(ownerName);
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+            true);
+        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerSimple, formName,
+            false);
+        if (baseFormResource == null || baseFormResource.getLocation() == null || parentFormResource == null
+            || parentFormResource.getLocation() == null)
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                "Cannot resolve parent/BaseForm paths for file sync. Owner: {0}, form: {1}, base: {2}, parent: {3}", //$NON-NLS-1$
+                ownerName, formName, baseFormResource, parentFormResource)));
+        }
+        Path parentPath = parentFormResource.getLocation().toFile().toPath();
+        Path basePath = baseFormResource.getLocation().toFile().toPath();
+        try
+        {
+            if (!Files.isRegularFile(parentPath) || Files.size(parentPath) == 0L)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                    "Parent Form.form missing or empty for file sync. Owner: {0}, form: {1}, path: {2}", //$NON-NLS-1$
+                    ownerName, formName, parentPath)));
+            }
+            Files.createDirectories(basePath.getParent());
+            Files.copy(parentPath, basePath, StandardCopyOption.REPLACE_EXISTING);
+        }
+        catch (IOException e)
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                "BaseForm file sync failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, e.toString()), //$NON-NLS-1$
+                e));
+        }
+        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+        logWarning("BaseForm overwritten from parent Form.form. Owner: {0}, form: {1}, bytes: {2}", //$NON-NLS-1$
+            ownerName, formName, Long.valueOf(basePath.toFile().length()));
+    }
+
+    private static boolean isCyclicLazyLinks(Throwable throwable)
+    {
+        for (Throwable t = throwable; t != null; t = t.getCause())
+        {
+            String msg = t.getMessage();
+            if (msg != null && msg.contains("Cyclic resolution of lazy links")) //$NON-NLS-1$
+                return true;
+            if (msg != null && msg.contains("CYCLIC_LAZY_LINKS")) //$NON-NLS-1$
+                return true;
+            if (t.toString().contains("Cyclic resolution of lazy links")) //$NON-NLS-1$
+                return true;
+        }
+        return false;
     }
 
     /**

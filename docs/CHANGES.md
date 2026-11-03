@@ -13,6 +13,15 @@
   `finally` deleted the snapshot. Now catch `Throwable`, restore before
   cleanup, and re-restore in `finally` unless committed.
 
+## 2026-11-03 — Cyclic on updateAdopted: retry + BaseForm file fallback
+
+- `updateAdopted` often throws Cyclic (PictureRef/ColorRef) on EDT 2026.2+.
+- Retry once after `refreshLocal`.
+- Still Cyclic → restore snapshot → copy parent `Form.form` onto extension
+  `BaseForm/Form.form` → platform-URI id-align → mark
+  **Updated (BaseForm file fallback)** (extension Form layer kept).
+- Batch log lines include `[Owner]` for Updated/Failed.
+
 
 Based on [Xelgo/edt-form-update-plugin](https://github.com/Xelgo/edt-form-update-plugin)
 around commit `f3c3a69` (main).

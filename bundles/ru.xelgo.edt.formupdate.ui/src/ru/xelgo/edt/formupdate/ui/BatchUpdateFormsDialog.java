@@ -293,9 +293,16 @@ final class BatchUpdateFormsDialog
             {
                 future.get(PER_FORM_TIMEOUT_SEC, TimeUnit.SECONDS);
                 updated++;
-                setCandidateStatus(candidate, FormUpdateCandidate.Status.SUCCESS,
-                    valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
-                appendLog(format(Messages.BatchUpdateFormsDialog_Updated, "Updated: {0}", candidate.getFormName())); //$NON-NLS-1$
+                String okMessage = candidate.getMessage();
+                if (okMessage == null || okMessage.isEmpty()
+                    || valueOrDefault(Messages.BatchUpdateFormsDialog_StatusRunning, "Updating").equals(okMessage)) //$NON-NLS-1$
+                {
+                    okMessage = valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated"); //$NON-NLS-1$
+                }
+                setCandidateStatus(candidate, FormUpdateCandidate.Status.SUCCESS, okMessage);
+                appendLog(MessageFormat.format("Updated: {0} [{1}]{2}", candidate.getFormName(), //$NON-NLS-1$
+                    candidate.getOwnerName(),
+                    okMessage.startsWith("Updated (") ? " — " + okMessage : "")); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
             }
             catch (TimeoutException e)
             {
@@ -307,8 +314,8 @@ final class BatchUpdateFormsDialog
                     "Timed out after {0}s — Form/BaseForm restored from snapshot if possible", //$NON-NLS-1$
                     Long.valueOf(PER_FORM_TIMEOUT_SEC));
                 setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, message);
-                appendLog(format(Messages.BatchUpdateFormsDialog_Failed, "Failed: {0}. {1}", candidate.getFormName(), //$NON-NLS-1$
-                    message));
+                appendLog(MessageFormat.format("Failed: {0} [{1}]. {2}", candidate.getFormName(), //$NON-NLS-1$
+                    candidate.getOwnerName(), message));
             }
             catch (ExecutionException e)
             {
@@ -319,8 +326,8 @@ final class BatchUpdateFormsDialog
                     cause = cause.getCause();
                 String message = getErrorMessage(cause);
                 setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, message);
-                appendLog(format(Messages.BatchUpdateFormsDialog_Failed, "Failed: {0}. {1}", candidate.getFormName(), //$NON-NLS-1$
-                    message));
+                appendLog(MessageFormat.format("Failed: {0} [{1}]. {2}", candidate.getFormName(), //$NON-NLS-1$
+                    candidate.getOwnerName(), message));
             }
             catch (InterruptedException e)
             {
@@ -330,8 +337,8 @@ final class BatchUpdateFormsDialog
                 updateOperation.abortAndRestore(candidate);
                 failed++;
                 setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, "Interrupted"); //$NON-NLS-1$
-                appendLog(format(Messages.BatchUpdateFormsDialog_Failed, "Failed: {0}. {1}", candidate.getFormName(), //$NON-NLS-1$
-                    "Interrupted")); //$NON-NLS-1$
+                appendLog(MessageFormat.format("Failed: {0} [{1}]. Interrupted", candidate.getFormName(), //$NON-NLS-1$
+                    candidate.getOwnerName()));
                 break;
             }
             finally
