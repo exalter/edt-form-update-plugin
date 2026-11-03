@@ -1459,7 +1459,10 @@ public class UpdateFormHandler
         dialog.setMessage(valueOrDefault(Messages.UpdateFormHandler_SelectExtensionMessage,
             "Select an extension project to update forms.")); //$NON-NLS-1$
         dialog.setElements(extensionProjects.toArray());
-        if (extensionProjects.size() == 1)
+        IExtensionProject preferred = preferExtensionProject(extensionProjects);
+        if (preferred != null)
+            dialog.setInitialSelections(new Object[] { preferred });
+        else if (extensionProjects.size() == 1)
             dialog.setInitialSelections(new Object[] { extensionProjects.get(0) });
 
         if (dialog.open() != Window.OK)
@@ -1467,6 +1470,28 @@ public class UpdateFormHandler
 
         Object selected = dialog.getFirstResult();
         return selected instanceof IExtensionProject ? (IExtensionProject)selected : null;
+    }
+
+    /**
+     * Prefer the main CFE project ({@code Ортикон.ЦФГ}) over {@code *_Тест} so
+     * agents/operators need not type into the filter (keyboard layout traps).
+     */
+    private IExtensionProject preferExtensionProject(List<IExtensionProject> extensionProjects)
+    {
+        IExtensionProject exactCfg = null;
+        IExtensionProject cfgWithoutTestSuffix = null;
+        for (IExtensionProject project : extensionProjects)
+        {
+            String name = getProjectName(project);
+            if ("Ортикон.ЦФГ".equals(name)) //$NON-NLS-1$
+                exactCfg = project;
+            if (name != null && name.startsWith("Ортикон.ЦФГ") && !name.contains("_Тест") //$NON-NLS-1$ //$NON-NLS-2$
+                && !name.toLowerCase().contains("test") && cfgWithoutTestSuffix == null) //$NON-NLS-1$
+                cfgWithoutTestSuffix = project;
+        }
+        if (exactCfg != null)
+            return exactCfg;
+        return cfgWithoutTestSuffix;
     }
 
     private Form getForm(BasicForm basicForm)

@@ -1,3 +1,8 @@
+## 1.0.2.v202611031701
+
+- Extension picker pre-selects `Ортикон.ЦФГ` (not `*_Тест`) — no typing in
+  the filter (EN/RU keyboard layout traps for agents).
+
 ## 1.0.2.v202611031640
 
 - Id-align after BaseForm sync is XML-first (EMF only if crash-pattern remains).
