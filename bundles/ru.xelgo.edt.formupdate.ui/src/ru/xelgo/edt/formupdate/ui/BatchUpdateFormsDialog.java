@@ -7,6 +7,13 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IProgressMonitor;
@@ -38,9 +45,18 @@ final class BatchUpdateFormsDialog
         boolean prepare();
 
         void update(FormUpdateCandidate candidate, IProgressMonitor monitor) throws CoreException;
+
+        /** Best-effort restore of Form/BaseForm after a timed-out / abandoned update. */
+        default void abortAndRestore(FormUpdateCandidate candidate)
+        {
+            // optional
+        }
     }
 
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss"); //$NON-NLS-1$
+    /** Per-form wall clock; override with -Dru.xelgo.edt.formupdate.perFormTimeoutSec=N */
+    private static final long PER_FORM_TIMEOUT_SEC = Long.getLong("ru.xelgo.edt.formupdate.perFormTimeoutSec", //$NON-NLS-1$
+        Long.valueOf(180L)).longValue();
 
     private final List<FormUpdateCandidate> candidates;
     private final UpdateOperation updateOperation;
@@ -50,6 +66,7 @@ final class BatchUpdateFormsDialog
     private org.eclipse.swt.widgets.Button updateButton;
     private org.eclipse.swt.widgets.Button closeButton;
     private boolean updating;
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
 
     BatchUpdateFormsDialog(Shell parentShell, List<FormUpdateCandidate> candidates, UpdateOperation updateOperation)
     {
@@ -199,8 +216,14 @@ final class BatchUpdateFormsDialog
     @Override
     protected void cancelPressed()
     {
-        if (!updating)
-            super.cancelPressed();
+        if (updating)
+        {
+            cancelRequested.set(true);
+            appendLog("Cancel requested — will stop after the current form times out or finishes."); //$NON-NLS-1$
+            // Keep dialog open until worker finishes current form / timeout.
+            return;
+        }
+        super.cancelPressed();
     }
 
     private void startUpdate()
@@ -218,13 +241,17 @@ final class BatchUpdateFormsDialog
         }
 
         updating = true;
+        cancelRequested.set(false);
         updateButton.setEnabled(false);
-        closeButton.setEnabled(false);
+        // Close stays enabled so a hang cannot trap the operator forever.
+        closeButton.setEnabled(true);
         viewer.getTable().setEnabled(false);
         progressBar.setMinimum(0);
         progressBar.setMaximum(selectedCandidates.size());
         progressBar.setSelection(0);
-        appendLog(format(Messages.BatchUpdateFormsDialog_Started, "Started. Selected: {0}.", selectedCandidates.size())); //$NON-NLS-1$
+        appendLog(format(Messages.BatchUpdateFormsDialog_Started,
+            "Started. Selected: {0}. Per-form timeout: {1}s.", //$NON-NLS-1$
+            Integer.valueOf(selectedCandidates.size()), Long.valueOf(PER_FORM_TIMEOUT_SEC)));
 
         Thread worker = new Thread(() -> runUpdate(selectedCandidates), "EDT form update batch"); //$NON-NLS-1$
         worker.setDaemon(true);
@@ -235,28 +262,81 @@ final class BatchUpdateFormsDialog
     {
         int updated = 0;
         int failed = 0;
-        NullProgressMonitor monitor = new NullProgressMonitor();
         for (FormUpdateCandidate candidate : selectedCandidates)
         {
+            if (cancelRequested.get())
+            {
+                appendLog("Batch stopped by cancel."); //$NON-NLS-1$
+                break;
+            }
             setCandidateStatus(candidate, FormUpdateCandidate.Status.RUNNING,
                 valueOrDefault(Messages.BatchUpdateFormsDialog_StatusRunning, "Updating")); //$NON-NLS-1$
             appendLog(format(Messages.UpdateFormHandler_Updating, "Updating extension form \"{0}\"", //$NON-NLS-1$
                 candidate.getFormName()));
+            NullProgressMonitor monitor = new NullProgressMonitor();
+            ExecutorService one = Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "EDT form update one"); //$NON-NLS-1$
+                t.setDaemon(true);
+                return t;
+            });
+            Future<?> future = one.submit(() -> {
+                try
+                {
+                    updateOperation.update(candidate, monitor);
+                }
+                catch (CoreException e)
+                {
+                    throw new RuntimeException(e);
+                }
+            });
             try
             {
-                updateOperation.update(candidate, monitor);
+                future.get(PER_FORM_TIMEOUT_SEC, TimeUnit.SECONDS);
                 updated++;
                 setCandidateStatus(candidate, FormUpdateCandidate.Status.SUCCESS,
                     valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
                 appendLog(format(Messages.BatchUpdateFormsDialog_Updated, "Updated: {0}", candidate.getFormName())); //$NON-NLS-1$
             }
-            catch (CoreException | RuntimeException e)
+            catch (TimeoutException e)
             {
+                monitor.setCanceled(true);
+                future.cancel(true);
+                updateOperation.abortAndRestore(candidate);
                 failed++;
-                String message = getErrorMessage(e);
+                String message = MessageFormat.format(
+                    "Timed out after {0}s — Form/BaseForm restored from snapshot if possible", //$NON-NLS-1$
+                    Long.valueOf(PER_FORM_TIMEOUT_SEC));
                 setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, message);
                 appendLog(format(Messages.BatchUpdateFormsDialog_Failed, "Failed: {0}. {1}", candidate.getFormName(), //$NON-NLS-1$
                     message));
+            }
+            catch (ExecutionException e)
+            {
+                updateOperation.abortAndRestore(candidate);
+                failed++;
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                if (cause instanceof RuntimeException && cause.getCause() instanceof CoreException)
+                    cause = cause.getCause();
+                String message = getErrorMessage(cause);
+                setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, message);
+                appendLog(format(Messages.BatchUpdateFormsDialog_Failed, "Failed: {0}. {1}", candidate.getFormName(), //$NON-NLS-1$
+                    message));
+            }
+            catch (InterruptedException e)
+            {
+                Thread.currentThread().interrupt();
+                monitor.setCanceled(true);
+                future.cancel(true);
+                updateOperation.abortAndRestore(candidate);
+                failed++;
+                setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, "Interrupted"); //$NON-NLS-1$
+                appendLog(format(Messages.BatchUpdateFormsDialog_Failed, "Failed: {0}. {1}", candidate.getFormName(), //$NON-NLS-1$
+                    "Interrupted")); //$NON-NLS-1$
+                break;
+            }
+            finally
+            {
+                one.shutdownNow();
             }
             incrementProgress();
         }

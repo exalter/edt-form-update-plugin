@@ -13,6 +13,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -141,6 +142,7 @@ public class UpdateFormHandler
         }
 
         Shell shell = HandlerUtil.getActiveShell(event);
+        ConcurrentHashMap<String, FormWorkspaceGuard> activeGuards = new ConcurrentHashMap<>();
         BatchUpdateFormsDialog dialog = new BatchUpdateFormsDialog(shell, candidates, new BatchUpdateFormsDialog.UpdateOperation()
         {
             @Override
@@ -152,15 +154,68 @@ public class UpdateFormHandler
             @Override
             public void update(FormUpdateCandidate candidate, IProgressMonitor monitor) throws CoreException
             {
+                String key = guardKey(candidate);
                 logInfo("Updating candidate started. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
                     candidate.getFormName());
-                modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
-                // Must throw on remaining crash-pattern → BatchUpdate marks Failed
-                // (file-URI align alone was overwritten by BM; platform URI + refresh).
-                alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
-                    candidate.getFormName(), monitor);
-                logInfo("Updating candidate finished. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
-                    candidate.getFormName());
+                String ownerSimple = getOwnerSimpleName(candidate.getOwnerName());
+                IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple,
+                    candidate.getFormName(), false);
+                IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple,
+                    candidate.getFormName(), true);
+                FormWorkspaceGuard guard = FormWorkspaceGuard.capture(formResource, baseFormResource);
+                activeGuards.put(key, guard);
+                try
+                {
+                    modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
+                    if (monitor.isCanceled())
+                        throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
+                    // Refresh disk view after adopt (may truncate then rewrite BaseForm).
+                    if (formResource != null)
+                        formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    if (baseFormResource != null)
+                        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    guard.assertNonEmpty("updateAdopted"); //$NON-NLS-1$
+                    // Must throw on remaining crash-pattern → BatchUpdate marks Failed
+                    // (file-URI align alone was overwritten by BM; platform URI + refresh).
+                    alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
+                    if (formResource != null)
+                        formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    if (baseFormResource != null)
+                        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    guard.assertNonEmpty("id-align"); //$NON-NLS-1$
+                    logInfo("Updating candidate finished. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
+                        candidate.getFormName());
+                }
+                catch (CoreException | RuntimeException e)
+                {
+                    guard.restore();
+                    throw e instanceof CoreException ? (CoreException)e
+                        : new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, e.toString(), e));
+                }
+                finally
+                {
+                    activeGuards.remove(key, guard);
+                    guard.cleanup();
+                }
+            }
+
+            @Override
+            public void abortAndRestore(FormUpdateCandidate candidate)
+            {
+                FormWorkspaceGuard guard = activeGuards.remove(guardKey(candidate));
+                if (guard != null)
+                {
+                    guard.restore();
+                    guard.cleanup();
+                    logWarning("Restored Form/BaseForm snapshot after abort. Owner: {0}, form: {1}", //$NON-NLS-1$
+                        candidate.getOwnerName(), candidate.getFormName());
+                }
+            }
+
+            private String guardKey(FormUpdateCandidate candidate)
+            {
+                return candidate.getOwnerName() + "#" + candidate.getFormName(); //$NON-NLS-1$
             }
         });
         dialog.open();

@@ -45,6 +45,20 @@ Now:
 - Remaining crash-pattern → **`CoreException`** → batch row **Failed** (not a
   silent warning). Operator/agent runs `post_form_update_hygiene.py`.
 
+### 2026-11-03 — hang / 0-byte BaseForm on heavy forms
+
+Batch could freeze on a large document form; EMF `save` truncates first, so a
+hang left `BaseForm/Form.form` at 0 bytes and grayed Update/Close forever.
+
+Now:
+
+- `FormWorkspaceGuard`: snapshot Form+BaseForm before update; restore on
+  failure / timeout; assert non-empty after `updateAdopted` and after id-align.
+- `FormIdConsistency.saveResource`: backup bytes → save → restore if empty.
+- Per-form timeout (default **180s**, `-Dru.xelgo.edt.formupdate.perFormTimeoutSec`);
+  Failed + restore + continue next form.
+- Close stays enabled during batch; Cancel requests stop after current form.
+
 ## Docs
 
 - Russian README focused on 2026.x install and usage.

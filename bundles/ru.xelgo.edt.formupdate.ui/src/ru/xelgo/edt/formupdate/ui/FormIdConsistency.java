@@ -1,10 +1,16 @@
 package ru.xelgo.edt.formupdate.ui;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.eclipse.core.resources.IFile;
+import org.eclipse.core.resources.ResourcesPlugin;
+import org.eclipse.core.runtime.IPath;
 import org.eclipse.emf.common.util.EList;
+import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EStructuralFeature;
 import org.eclipse.emf.ecore.resource.Resource;
@@ -220,10 +226,48 @@ final class FormIdConsistency
             object.eSet(feature, value);
     }
 
+    /**
+     * Save with pre-image backup: EMF {@code save} truncates first — a hang mid-write
+     * previously left 0-byte BaseForm. Restore backup if the file is empty after save.
+     */
     private static void saveResource(Resource resource) throws IOException
     {
-        if (resource != null)
-            resource.save(null);
+        if (resource == null)
+            return;
+        Path path = resolveFilePath(resource.getURI());
+        byte[] backup = null;
+        if (path != null && Files.exists(path))
+            backup = Files.readAllBytes(path);
+        resource.save(null);
+        if (path == null)
+            return;
+        long size = Files.exists(path) ? Files.size(path) : 0L;
+        if (size == 0L)
+        {
+            if (backup != null && backup.length > 0)
+                Files.write(path, backup);
+            throw new IOException("resource save produced empty file: " + path); //$NON-NLS-1$
+        }
+    }
+
+    private static Path resolveFilePath(URI uri)
+    {
+        if (uri == null)
+            return null;
+        if (uri.isFile())
+            return Path.of(uri.toFileString());
+        if (uri.isPlatformResource())
+        {
+            String platform = uri.toPlatformString(true);
+            if (platform == null)
+                return null;
+            IPath ipath = org.eclipse.core.runtime.Path.fromPortableString(
+                platform.startsWith("/") ? platform.substring(1) : platform); //$NON-NLS-1$
+            IFile file = ResourcesPlugin.getWorkspace().getRoot().getFile(ipath);
+            if (file.getLocation() != null)
+                return file.getLocation().toFile().toPath();
+        }
+        return null;
     }
 
     static final class Result
