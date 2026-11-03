@@ -661,20 +661,17 @@ public class UpdateFormHandler
             boolean updateRequired = false;
             if (sourceAdopted && currentBaseForm != null && freshBaseForm != null && !baseEqual)
             {
-                if (equalityFailed)
+                // After BaseForm sync + id-align, EMF almost always reports unequal
+                // (extension-range ids on BaseForm vs parent ids on fresh adopt).
+                // Disk marker / equalIgnoringIds is authoritative — do not let EDT
+                // compare alone re-list every form after a successful Update.
+                updateRequired = isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName);
+                if (updateRequired && !equalityFailed)
                 {
-                    updateRequired = isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName);
-                }
-                else
-                {
-                    // EMF says unequal. EDT compare can hang/fail on 2026.2 — confirm via files;
-                    // if files also differ (or compare unavailable), require update.
-                    boolean edtSaysUpdate = isFormUpdateRequiredByEdtCompare(extensionProject, sourceForm, ownerName,
-                        formName);
-                    if (edtSaysUpdate)
-                        updateRequired = true;
-                    else
-                        updateRequired = isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName);
+                    // Optional soft signal only; files already decided.
+                    logInfo(
+                        "EMF base unequal; workspace files require update. Owner: {0}, form: {1}", //$NON-NLS-1$
+                        ownerName, formName);
                 }
             }
             logInfo(

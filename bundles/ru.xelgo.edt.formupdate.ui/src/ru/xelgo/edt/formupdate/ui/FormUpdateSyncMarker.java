@@ -28,28 +28,54 @@ final class FormUpdateSyncMarker
     {
     }
 
-    static void write(IProject extensionProject, String ownerSimpleName, String formName, Path parentFormPath)
+    static void write(IProject extensionProject, String ownerKey, String formName, Path parentFormPath)
         throws IOException
     {
         if (extensionProject == null || parentFormPath == null || !Files.isRegularFile(parentFormPath))
             return;
-        Path marker = markerFile(extensionProject, ownerSimpleName, formName);
-        Files.createDirectories(marker.getParent());
-        Files.writeString(marker, sha256Hex(Files.readAllBytes(parentFormPath)) + "\n", StandardCharsets.US_ASCII); //$NON-NLS-1$
+        String digest = sha256Hex(Files.readAllBytes(parentFormPath)) + "\n"; //$NON-NLS-1$
+        // Write qualified key and simple-name legacy key so older markers still match
+        // after the AccountingRegister.НФО disambiguation change.
+        for (String key : ownerKeys(ownerKey))
+        {
+            Path marker = markerFile(extensionProject, key, formName);
+            Files.createDirectories(marker.getParent());
+            Files.writeString(marker, digest, StandardCharsets.US_ASCII);
+        }
     }
 
     /** {@code true} when marker exists and matches current parent file digest. */
-    static boolean isCurrent(IProject extensionProject, String ownerSimpleName, String formName, Path parentFormPath)
+    static boolean isCurrent(IProject extensionProject, String ownerKey, String formName, Path parentFormPath)
         throws IOException
     {
         if (extensionProject == null || parentFormPath == null || !Files.isRegularFile(parentFormPath))
             return false;
-        Path marker = markerFile(extensionProject, ownerSimpleName, formName);
-        if (!Files.isRegularFile(marker))
-            return false;
         String expected = sha256Hex(Files.readAllBytes(parentFormPath));
-        String actual = Files.readString(marker, StandardCharsets.US_ASCII).trim();
-        return expected.equalsIgnoreCase(actual);
+        for (String key : ownerKeys(ownerKey))
+        {
+            Path marker = markerFile(extensionProject, key, formName);
+            if (!Files.isRegularFile(marker))
+                continue;
+            String actual = Files.readString(marker, StandardCharsets.US_ASCII).trim();
+            if (expected.equalsIgnoreCase(actual))
+                return true;
+        }
+        return false;
+    }
+
+    /** Qualified owner plus trailing simple name (legacy marker key). */
+    private static String[] ownerKeys(String ownerKey)
+    {
+        if (ownerKey == null || ownerKey.isEmpty())
+            return new String[0];
+        int dot = ownerKey.lastIndexOf('.');
+        if (dot > 0 && dot + 1 < ownerKey.length())
+        {
+            String simple = ownerKey.substring(dot + 1);
+            if (!simple.equals(ownerKey))
+                return new String[] { ownerKey, simple };
+        }
+        return new String[] { ownerKey };
     }
 
     /**

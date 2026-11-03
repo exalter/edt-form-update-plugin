@@ -1,3 +1,10 @@
+## 1.0.2.1.0.2.v202611031743 (relist fix)
+
+- Update detector: when EMF BaseForm ≠ fresh adopt, decide only via sync-marker /
+  equalIgnoringIds — never EDT compare alone (id-align made EMF always unequal).
+- Sync marker: write+read both qualified and simple owner keys (compat after
+  AccountingRegister.НФО disambiguation).
+
 ## 1.0.2.v202611031723
 
 - Resolve parent Form.form by metadata type folder when the same object name
