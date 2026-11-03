@@ -159,10 +159,10 @@ public class UpdateFormHandler
                 String key = guardKey(candidate);
                 logInfo("Updating candidate started. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
                     candidate.getFormName());
-                String ownerSimple = getOwnerSimpleName(candidate.getOwnerName());
-                IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple,
+                String ownerQualified = candidate.getOwnerName();
+                IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerQualified,
                     candidate.getFormName(), false);
-                IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple,
+                IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerQualified,
                     candidate.getFormName(), true);
                 FormWorkspaceGuard guard = FormWorkspaceGuard.capture(formResource, baseFormResource);
                 activeGuards.put(key, guard);
@@ -492,7 +492,7 @@ public class UpdateFormHandler
 
     private Form loadWorkspaceForm(BasicForm mdForm, IExtensionProject extensionProject)
     {
-        IResource resource = findWorkspaceFormResource(extensionProject.getProject(), getOwnerSimpleName(mdForm),
+        IResource resource = findWorkspaceFormResource(extensionProject.getProject(), getOwnerName(mdForm),
             mdForm.getName(), false);
         if (resource == null)
             return null;
@@ -513,11 +513,20 @@ public class UpdateFormHandler
         return null;
     }
 
-    private IResource findWorkspaceFormResource(IProject project, String ownerName, String formName, boolean baseForm)
+    /**
+     * Resolve Form.form / BaseForm/Form.form under {@code owner}.
+     * {@code owner} may be simple ({@code НФО}) or qualified
+     * ({@code AccountingRegister.НФО}) — qualified is required when the parent
+     * configuration has the same name under several metadata types (e.g. НФО
+     * as AccountingRegister and ChartOfAccounts).
+     */
+    private IResource findWorkspaceFormResource(IProject project, String owner, String formName, boolean baseForm)
     {
         if (project == null || formName == null)
             return null;
 
+        String ownerSimple = getOwnerSimpleName(owner);
+        String typeFolder = metadataTypeFolder(owner);
         List<IResource> matches = new ArrayList<>();
         String suffix = baseForm ? "/Forms/" + formName + "/BaseForm/Form.form" //$NON-NLS-1$ //$NON-NLS-2$
             : "/Forms/" + formName + "/Form.form"; //$NON-NLS-1$ //$NON-NLS-2$
@@ -527,10 +536,13 @@ public class UpdateFormHandler
                 if (resource.getType() != IResource.FILE || !"form".equalsIgnoreCase(resource.getFileExtension())) //$NON-NLS-1$
                     return true;
 
-                String path = resource.getProjectRelativePath().toString();
+                String path = resource.getProjectRelativePath().toString().replace('\\', '/'); //$NON-NLS-1$
                 if (!path.endsWith(suffix))
                     return true;
-                if (ownerName != null && !path.contains("/" + ownerName + "/Forms/")) //$NON-NLS-1$ //$NON-NLS-2$
+                if (ownerSimple != null && !path.contains("/" + ownerSimple + "/Forms/")) //$NON-NLS-1$ //$NON-NLS-2$
+                    return true;
+                if (typeFolder != null
+                    && !path.contains("/" + typeFolder + "/" + ownerSimple + "/")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     return true;
 
                 matches.add(resource);
@@ -546,16 +558,72 @@ public class UpdateFormHandler
         if (matches.isEmpty())
         {
             logWarning("Workspace {0}Form.form was not found. Owner: {1}, form: {2}, project: {3}", //$NON-NLS-1$
-                baseForm ? "BaseForm/" : "", ownerName, formName, project.getName()); //$NON-NLS-1$ //$NON-NLS-2$
+                baseForm ? "BaseForm/" : "", owner, formName, project.getName()); //$NON-NLS-1$ //$NON-NLS-2$
             return null;
         }
         if (matches.size() > 1)
         {
             logWarning("Workspace {0}Form.form lookup is ambiguous. Owner: {1}, form: {2}, matches: {3}", //$NON-NLS-1$
-                baseForm ? "BaseForm/" : "", ownerName, formName, matches.size()); //$NON-NLS-1$ //$NON-NLS-2$
+                baseForm ? "BaseForm/" : "", owner, formName, matches.size()); //$NON-NLS-1$ //$NON-NLS-2$
             return null;
         }
         return matches.get(0);
+    }
+
+    /**
+     * EDT src folder for a qualified owner {@code EClassSimpleName.ObjectName}.
+     * Returns {@code null} when owner is not qualified (legacy simple name).
+     */
+    private String metadataTypeFolder(String ownerQualified)
+    {
+        if (ownerQualified == null)
+            return null;
+        int dot = ownerQualified.lastIndexOf('.');
+        if (dot <= 0)
+            return null;
+        String type = ownerQualified.substring(0, dot);
+        switch (type)
+        {
+            case "AccountingRegister": //$NON-NLS-1$
+                return "AccountingRegisters"; //$NON-NLS-1$
+            case "AccumulationRegister": //$NON-NLS-1$
+                return "AccumulationRegisters"; //$NON-NLS-1$
+            case "CalculationRegister": //$NON-NLS-1$
+                return "CalculationRegisters"; //$NON-NLS-1$
+            case "InformationRegister": //$NON-NLS-1$
+                return "InformationRegisters"; //$NON-NLS-1$
+            case "Catalog": //$NON-NLS-1$
+                return "Catalogs"; //$NON-NLS-1$
+            case "Document": //$NON-NLS-1$
+                return "Documents"; //$NON-NLS-1$
+            case "DocumentJournal": //$NON-NLS-1$
+                return "DocumentJournals"; //$NON-NLS-1$
+            case "Enum": //$NON-NLS-1$
+                return "Enums"; //$NON-NLS-1$
+            case "Report": //$NON-NLS-1$
+                return "Reports"; //$NON-NLS-1$
+            case "DataProcessor": //$NON-NLS-1$
+                return "DataProcessors"; //$NON-NLS-1$
+            case "ChartOfAccounts": //$NON-NLS-1$
+                return "ChartsOfAccounts"; //$NON-NLS-1$
+            case "ChartOfCharacteristicTypes": //$NON-NLS-1$
+                return "ChartsOfCharacteristicTypes"; //$NON-NLS-1$
+            case "ChartOfCalculationTypes": //$NON-NLS-1$
+                return "ChartsOfCalculationTypes"; //$NON-NLS-1$
+            case "BusinessProcess": //$NON-NLS-1$
+                return "BusinessProcesses"; //$NON-NLS-1$
+            case "Task": //$NON-NLS-1$
+                return "Tasks"; //$NON-NLS-1$
+            case "ExchangePlan": //$NON-NLS-1$
+                return "ExchangePlans"; //$NON-NLS-1$
+            case "FilterCriterion": //$NON-NLS-1$
+                return "FilterCriteria"; //$NON-NLS-1$
+            case "SettingsStorage": //$NON-NLS-1$
+                return "SettingsStorages"; //$NON-NLS-1$
+            default:
+                // Weak plural — better than dropping the type disambiguator entirely.
+                return type.endsWith("s") ? type : type + "s"; //$NON-NLS-1$ //$NON-NLS-2$
+        }
     }
 
     private boolean isFormUpdateRequired(IExtensionProject extensionProject, IModelObjectAdopter modelObjectAdopter,
@@ -634,10 +702,9 @@ public class UpdateFormHandler
     private void alignFormBaseFormIdsAfterUpdate(IExtensionProject extensionProject, String ownerName, String formName,
         IProgressMonitor monitor) throws CoreException
     {
-        String ownerSimple = getOwnerSimpleName(ownerName);
-        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
             false);
-        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
             true);
         if (formResource == null || baseFormResource == null)
         {
@@ -808,10 +875,9 @@ public class UpdateFormHandler
             logWarning("No parent project for BaseForm file sync. Owner: {0}, form: {1}", ownerName, formName); //$NON-NLS-1$
             return false;
         }
-        String ownerSimple = getOwnerSimpleName(ownerName);
-        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
             true);
-        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerSimple, formName,
+        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerName, formName,
             false);
         if (baseFormResource == null || baseFormResource.getLocation() == null)
         {
@@ -886,10 +952,9 @@ public class UpdateFormHandler
                 ownerName, formName);
             return true;
         }
-        String ownerSimple = getOwnerSimpleName(ownerName);
-        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
             true);
-        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerSimple, formName,
+        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerName, formName,
             false);
         if (baseFormResource == null || baseFormResource.getLocation() == null || parentFormResource == null
             || parentFormResource.getLocation() == null)
@@ -903,7 +968,7 @@ public class UpdateFormHandler
         Path parentPath = parentFormResource.getLocation().toFile().toPath();
         try
         {
-            if (FormUpdateSyncMarker.isCurrent(extensionProject.getProject(), ownerSimple, formName, parentPath))
+            if (FormUpdateSyncMarker.isCurrent(extensionProject.getProject(), ownerName, formName, parentPath))
             {
                 logInfo(
                     "Workspace file compare. Owner: {0}, form: {1}, syncMarker: current → skip", //$NON-NLS-1$
@@ -934,14 +999,13 @@ public class UpdateFormHandler
         IV8Project parentProject = extensionProject.getParent();
         if (parentProject == null || parentProject.getProject() == null)
             return;
-        String ownerSimple = getOwnerSimpleName(ownerName);
-        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerSimple, formName,
+        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerName, formName,
             false);
         if (parentFormResource == null || parentFormResource.getLocation() == null)
             return;
         try
         {
-            FormUpdateSyncMarker.write(extensionProject.getProject(), ownerSimple, formName,
+            FormUpdateSyncMarker.write(extensionProject.getProject(), ownerName, formName,
                 parentFormResource.getLocation().toFile().toPath());
         }
         catch (IOException e)
@@ -965,8 +1029,8 @@ public class UpdateFormHandler
             return false;
         }
 
-        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), getOwnerSimpleName(
-            ownerName), formName, true);
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+            true);
         if (baseFormResource == null || baseFormResource.getLocation() == null)
             return false;
 
@@ -1290,8 +1354,7 @@ public class UpdateFormHandler
         if (baseForm != null)
             return baseForm;
 
-        IResource resource = findWorkspaceFormResource(extensionProject.getProject(), getOwnerSimpleName(ownerName),
-            formName, true);
+        IResource resource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName, true);
         if (resource == null)
             return null;
 

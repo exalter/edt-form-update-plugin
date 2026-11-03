@@ -73,6 +73,8 @@ final class FormUpdateSyncMarker
         Bundle bundle = FrameworkUtil.getBundle(FormUpdateSyncMarker.class);
         IPath state = bundle != null ? Platform.getStateLocation(bundle)
             : Platform.getStateLocation(Platform.getBundle(PLUGIN_ID));
+        // ownerSimpleName may be qualified (AccountingRegister.НФО) — keep as given so
+        // same object name under different metadata types do not share a marker.
         String key = sha256Hex((extensionProject.getName() + '\0' + ownerSimpleName + '\0' + formName)
             .getBytes(StandardCharsets.UTF_8));
         return state.toFile().toPath().resolve("parent-sync").resolve(key + ".sha256"); //$NON-NLS-1$ //$NON-NLS-2$

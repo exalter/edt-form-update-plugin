@@ -1,3 +1,10 @@
+## 1.0.2.v202611031723
+
+- Resolve parent Form.form by metadata type folder when the same object name
+  exists twice (e.g. AccountingRegister.НФО vs ChartOfAccounts.НФО;
+  Catalog vs InformationRegister нфо_УсловияТрансляции). Fixes the two leftover
+  forms that always reappeared with parent: null (ambiguous lookup).
+
 ## 1.0.2.v202611031701
 
 - Extension picker pre-selects `Ортикон.ЦФГ` (not `*_Тест`) — no typing in
