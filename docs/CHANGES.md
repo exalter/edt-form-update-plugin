@@ -6,6 +6,13 @@
   early menu open after restart does not show empty-workspace false negative.
 - Clearer `NoExtensionProject` message (wait for context activation).
 
+## 2026-11-03 — restore on AssertionError (cyclic lazy links)
+
+- Batch Failed on `AssertionError: Cyclic resolution of lazy links` used to
+  skip restore: catch was only `CoreException|RuntimeException`, then
+  `finally` deleted the snapshot. Now catch `Throwable`, restore before
+  cleanup, and re-restore in `finally` unless committed.
+
 
 Based on [Xelgo/edt-form-update-plugin](https://github.com/Xelgo/edt-form-update-plugin)
 around commit `f3c3a69` (main).

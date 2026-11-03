@@ -165,6 +165,7 @@ public class UpdateFormHandler
                     candidate.getFormName(), true);
                 FormWorkspaceGuard guard = FormWorkspaceGuard.capture(formResource, baseFormResource);
                 activeGuards.put(key, guard);
+                boolean committed = false;
                 try
                 {
                     modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
@@ -185,18 +186,29 @@ public class UpdateFormHandler
                     if (baseFormResource != null)
                         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                     guard.assertNonEmpty("id-align"); //$NON-NLS-1$
+                    committed = true;
                     logInfo("Updating candidate finished. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
                         candidate.getFormName());
                 }
-                catch (CoreException | RuntimeException e)
+                catch (CoreException e)
                 {
                     guard.restore();
-                    throw e instanceof CoreException ? (CoreException)e
-                        : new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, e.toString(), e));
+                    throw e;
+                }
+                catch (Throwable t)
+                {
+                    // AssertionError (cyclic PictureRef/ColorRef lazy links) is Error, not Exception —
+                    // must restore before cleanup or Failed rows leave 0-byte BaseForm.
+                    guard.restore();
+                    if (t instanceof Error && !(t instanceof AssertionError))
+                        throw (Error)t;
+                    throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, t.toString(), t));
                 }
                 finally
                 {
                     activeGuards.remove(key, guard);
+                    if (!committed)
+                        guard.restore();
                     guard.cleanup();
                 }
             }
