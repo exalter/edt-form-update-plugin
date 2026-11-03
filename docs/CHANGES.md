@@ -1,3 +1,11 @@
+## 1.0.2.v202611031612
+
+- BaseForm sync: missing parent Form.form is soft skip (Updated), not Failed.
+- Id-align: on EMF Cyclic → XML Form→BaseForm id copy (same as hygiene script).
+- Remaining crash-pattern after align → soft warn; row stays Updated (hygiene closes).
+- Refresh parent folder after BaseForm overwrite (fewer out-of-sync ResourceException).
+- Sync-marker + equalIgnoringIds unchanged: updated forms must not reappear solely due to id-align.
+
 # Changes vs upstream Xelgo
 
 ## 2026-11-03 — wait for V8 extension projects after restart

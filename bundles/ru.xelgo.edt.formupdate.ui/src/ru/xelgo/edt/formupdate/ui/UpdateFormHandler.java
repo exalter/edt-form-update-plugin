@@ -200,24 +200,35 @@ public class UpdateFormHandler
                             candidate.getOwnerName(), candidate.getFormName());
                         fileFallback = true;
                     }
-                    // Always force BaseForm = parent Form.form on disk, then id-align.
-                    // updateAdopted alone often leaves BaseForm behind parent; id-align then
-                    // makes raw bytes ≠ parent and the form reappears on every scan.
-                    syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(), candidate.getFormName(),
-                        monitor);
+                    // Always force BaseForm = parent Form.form on disk when parent exists,
+                    // then id-align (EMF, XML fallback on Cyclic). Missing parent is soft —
+                    // adopt may already have refreshed BaseForm; do not mark Failed.
+                    boolean synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
                     if (formResource != null)
                         formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                     if (baseFormResource != null)
+                    {
+                        if (baseFormResource.getParent() != null)
+                            baseFormResource.getParent().refreshLocal(IResource.DEPTH_ONE, monitor);
                         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    }
                     guard.assertNonEmpty(fileFallback ? "cyclic-file-fallback" : "id-align"); //$NON-NLS-1$ //$NON-NLS-2$
                     writeParentSyncMarker(extensionProject, candidate.getOwnerName(), candidate.getFormName());
-                    candidate.setMessage(fileFallback ? "Updated (BaseForm file fallback)" //$NON-NLS-1$
-                        : valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
+                    if (fileFallback)
+                        candidate.setMessage(synced ? "Updated (BaseForm file fallback)" //$NON-NLS-1$
+                            : "Updated (adopt Cyclic; no parent Form.form)"); //$NON-NLS-1$
+                    else if (!synced)
+                        candidate.setMessage("Updated (no parent Form.form sync)"); //$NON-NLS-1$
+                    else
+                        candidate.setMessage(
+                            valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
                     committed = true;
-                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}", //$NON-NLS-1$
-                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback));
+                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}, synced: {3}", //$NON-NLS-1$
+                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback),
+                        Boolean.valueOf(synced));
                 }
                 catch (CoreException e)
                 {
@@ -630,34 +641,53 @@ public class UpdateFormHandler
             true);
         if (formResource == null || baseFormResource == null)
         {
-            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
-                MessageFormat.format(
-                    "Form/BaseForm id align skipped (workspace files missing). Owner: {0}, form: {1}", //$NON-NLS-1$
-                    ownerName, formName)));
+            logWarning(
+                "Form/BaseForm id align skipped (workspace files missing). Owner: {0}, form: {1}", //$NON-NLS-1$
+                ownerName, formName);
+            return;
         }
 
         formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
 
-        FormIdConsistency.Result result;
+        FormIdConsistency.Result result = null;
         try
         {
             result = alignOnceViaPlatformUri(formResource, baseFormResource);
             if (result.stillMismatched() || result.isCrashPatternAfter())
             {
-                // updateAdopted may flush BaseForm after first save — refresh and retry.
                 formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                 baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                 result = alignOnceViaPlatformUri(formResource, baseFormResource);
             }
         }
-        catch (IOException | RuntimeException e)
+        catch (Throwable emfError)
         {
-            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
-                MessageFormat.format("Form/BaseForm id align failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
-                    ownerName, formName, e.toString()),
-                e));
+            // Cyclic PictureRef/EventHandler on EMF load — fall back to XML id copy.
+            if (!isCyclicLazyLinks(emfError) && !(emfError instanceof IOException)
+                && !(emfError instanceof RuntimeException))
+            {
+                if (emfError instanceof Error && !(emfError instanceof AssertionError))
+                    throw (Error)emfError;
+            }
+            logWarning(
+                "EMF id-align failed — trying XML. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                ownerName, formName, emfError.toString());
+            try
+            {
+                result = alignOnceViaXmlFiles(formResource, baseFormResource);
+            }
+            catch (IOException xmlError)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
+                    MessageFormat.format("Form/BaseForm id align failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                        ownerName, formName, xmlError.toString()),
+                    xmlError));
+            }
         }
+
+        if (result == null)
+            return;
 
         if (result.hadMismatch())
             logWarning("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
@@ -668,11 +698,12 @@ public class UpdateFormHandler
 
         if (result.stillMismatched() || result.isCrashPatternAfter())
         {
-            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
-                MessageFormat.format(
-                    "Form/BaseForm id crash-pattern remains after align. Owner: {0}, form: {1}. " //$NON-NLS-1$
-                        + "Run post_form_update_hygiene.py / align_form_baseform_ids.py.", //$NON-NLS-1$
-                    ownerName, formName)));
+            // Soft: hygiene script closes remaining crash-pattern; do not fail the row
+            // after BaseForm was already synced (re-list fix + marker still apply).
+            logWarning(
+                "Form/BaseForm id crash-pattern remains after align. Owner: {0}, form: {1}. " //$NON-NLS-1$
+                    + "Run post_form_update_hygiene.py.", //$NON-NLS-1$
+                ownerName, formName);
         }
     }
 
@@ -689,6 +720,26 @@ public class UpdateFormHandler
         Form form = formRes.getContents().isEmpty() ? null : (Form)formRes.getContents().get(0);
         Form baseForm = baseRes.getContents().isEmpty() ? null : (Form)baseRes.getContents().get(0);
         return FormIdConsistency.alignFormIdsOntoBaseForm(form, baseForm);
+    }
+
+    private FormIdConsistency.Result alignOnceViaXmlFiles(IResource formResource, IResource baseFormResource)
+        throws IOException
+    {
+        if (formResource.getLocation() == null || baseFormResource.getLocation() == null)
+            return FormIdConsistency.Result.empty();
+        Path formPath = formResource.getLocation().toFile().toPath();
+        Path basePath = baseFormResource.getLocation().toFile().toPath();
+        FormIdConsistency.Result result = FormIdConsistency.alignFormIdsOntoBaseFormXml(formPath, basePath);
+        try
+        {
+            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, null);
+        }
+        catch (CoreException e)
+        {
+            // disk already written; workspace refresh is best-effort
+            logWarning("BaseForm refresh after XML id-align failed: {0}", e.toString()); //$NON-NLS-1$
+        }
+        return result;
     }
 
     /**
@@ -747,27 +798,36 @@ public class UpdateFormHandler
      * Copy parent configuration {@code Form.form} onto extension {@code BaseForm/Form.form}
      * without EMF adopt. Keeps extension Form layer; refreshes vendor snapshot when Cyclic
      * blocks {@code updateAdopted}.
+     *
+     * @return {@code true} when BaseForm was overwritten from parent; {@code false} when
+     *         parent Form.form is missing (soft — do not fail the row).
      */
-    private void syncBaseFormFromParentFile(IExtensionProject extensionProject, String ownerName, String formName,
+    private boolean syncBaseFormFromParentFile(IExtensionProject extensionProject, String ownerName, String formName,
         IProgressMonitor monitor) throws CoreException
     {
         IV8Project parentProject = extensionProject.getParent();
         if (parentProject == null || parentProject.getProject() == null)
         {
-            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
-                "No parent project for BaseForm file sync. Owner: {0}, form: {1}", ownerName, formName))); //$NON-NLS-1$
+            logWarning("No parent project for BaseForm file sync. Owner: {0}, form: {1}", ownerName, formName); //$NON-NLS-1$
+            return false;
         }
         String ownerSimple = getOwnerSimpleName(ownerName);
         IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerSimple, formName,
             true);
         IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerSimple, formName,
             false);
-        if (baseFormResource == null || baseFormResource.getLocation() == null || parentFormResource == null
-            || parentFormResource.getLocation() == null)
+        if (baseFormResource == null || baseFormResource.getLocation() == null)
         {
-            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
-                "Cannot resolve parent/BaseForm paths for file sync. Owner: {0}, form: {1}, base: {2}, parent: {3}", //$NON-NLS-1$
-                ownerName, formName, baseFormResource, parentFormResource)));
+            logWarning("BaseForm path missing for file sync. Owner: {0}, form: {1}", ownerName, formName); //$NON-NLS-1$
+            return false;
+        }
+        if (parentFormResource == null || parentFormResource.getLocation() == null)
+        {
+            // Extension-only / renamed parent object — adopt may still have updated Form.
+            logWarning(
+                "Parent Form.form not found — skip BaseForm file sync. Owner: {0}, form: {1}, base: {2}", //$NON-NLS-1$
+                ownerName, formName, baseFormResource);
+            return false;
         }
         Path parentPath = parentFormResource.getLocation().toFile().toPath();
         Path basePath = baseFormResource.getLocation().toFile().toPath();
@@ -775,9 +835,10 @@ public class UpdateFormHandler
         {
             if (!Files.isRegularFile(parentPath) || Files.size(parentPath) == 0L)
             {
-                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
-                    "Parent Form.form missing or empty for file sync. Owner: {0}, form: {1}, path: {2}", //$NON-NLS-1$
-                    ownerName, formName, parentPath)));
+                logWarning(
+                    "Parent Form.form missing or empty — skip BaseForm file sync. Owner: {0}, form: {1}, path: {2}", //$NON-NLS-1$
+                    ownerName, formName, parentPath);
+                return false;
             }
             Files.createDirectories(basePath.getParent());
             Files.copy(parentPath, basePath, StandardCopyOption.REPLACE_EXISTING);
@@ -788,9 +849,12 @@ public class UpdateFormHandler
                 "BaseForm file sync failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, e.toString()), //$NON-NLS-1$
                 e));
         }
+        if (baseFormResource.getParent() != null)
+            baseFormResource.getParent().refreshLocal(IResource.DEPTH_ONE, monitor);
         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
         logWarning("BaseForm overwritten from parent Form.form. Owner: {0}, form: {1}, bytes: {2}", //$NON-NLS-1$
             ownerName, formName, Long.valueOf(basePath.toFile().length()));
+        return true;
     }
 
     private static boolean isCyclicLazyLinks(Throwable throwable)

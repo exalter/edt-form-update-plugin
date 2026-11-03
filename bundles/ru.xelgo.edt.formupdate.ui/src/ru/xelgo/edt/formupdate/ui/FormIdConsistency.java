@@ -68,6 +68,105 @@ final class FormIdConsistency
             cmdMismatchAfter, crashBefore, crashAfter);
     }
 
+    /**
+     * File-level id align (no EMF). Used when EDT throws Cyclic on resource load —
+     * same algorithm as {@code align_form_baseform_ids.py}.
+     */
+    static Result alignFormIdsOntoBaseFormXml(Path formPath, Path baseFormPath) throws IOException
+    {
+        if (formPath == null || baseFormPath == null || !Files.isRegularFile(formPath)
+            || !Files.isRegularFile(baseFormPath))
+            return Result.empty();
+
+        String formText = Files.readString(formPath);
+        String baseText = Files.readString(baseFormPath);
+        Map<String, Long> formAttrIds = collectXmlNameIds(formText, "attributes"); //$NON-NLS-1$
+        Map<String, Long> formCmdIds = collectXmlNameIds(formText, "formCommands"); //$NON-NLS-1$
+        Map<String, Long> baseAttrIds = collectXmlNameIds(baseText, "attributes"); //$NON-NLS-1$
+        Map<String, Long> baseCmdIds = collectXmlNameIds(baseText, "formCommands"); //$NON-NLS-1$
+
+        int attrMismatchBefore = countMismatches(formAttrIds, baseAttrIds);
+        int cmdMismatchBefore = countMismatches(formCmdIds, baseCmdIds);
+        boolean crashBefore = isCrashPattern(formAttrIds, baseAttrIds, attrMismatchBefore);
+
+        ApplyXmlResult attrs = applyXmlIds(baseText, "attributes", formAttrIds); //$NON-NLS-1$
+        ApplyXmlResult cmds = applyXmlIds(attrs.text, "formCommands", formCmdIds); //$NON-NLS-1$
+        if (attrs.changed + cmds.changed > 0 && !cmds.text.equals(baseText))
+        {
+            byte[] backup = Files.readAllBytes(baseFormPath);
+            Files.writeString(baseFormPath, cmds.text);
+            if (Files.size(baseFormPath) == 0L)
+            {
+                Files.write(baseFormPath, backup);
+                throw new IOException("XML id-align produced empty BaseForm: " + baseFormPath); //$NON-NLS-1$
+            }
+        }
+
+        Map<String, Long> baseAttrAfter = collectXmlNameIds(cmds.text, "attributes"); //$NON-NLS-1$
+        Map<String, Long> baseCmdAfter = collectXmlNameIds(cmds.text, "formCommands"); //$NON-NLS-1$
+        int attrMismatchAfter = countMismatches(formAttrIds, baseAttrAfter);
+        int cmdMismatchAfter = countMismatches(formCmdIds, baseCmdAfter);
+        boolean crashAfter = isCrashPattern(formAttrIds, baseAttrAfter, attrMismatchAfter);
+        return new Result(attrMismatchBefore, cmdMismatchBefore, attrs.changed, cmds.changed, attrMismatchAfter,
+            cmdMismatchAfter, crashBefore, crashAfter);
+    }
+
+    private static Map<String, Long> collectXmlNameIds(String xml, String tag)
+    {
+        Map<String, Long> result = new HashMap<>();
+        java.util.regex.Pattern block = java.util.regex.Pattern.compile(
+            "<" + tag + ">(.*?)</" + tag + ">", java.util.regex.Pattern.DOTALL); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        java.util.regex.Matcher m = block.matcher(xml);
+        while (m.find())
+        {
+            String body = m.group(1);
+            java.util.regex.Matcher name = java.util.regex.Pattern.compile("<name>([^<]+)</name>").matcher(body); //$NON-NLS-1$
+            java.util.regex.Matcher id = java.util.regex.Pattern.compile("<id>(\\d+)</id>").matcher(body); //$NON-NLS-1$
+            if (name.find() && id.find())
+                result.put(name.group(1), Long.valueOf(id.group(1)));
+        }
+        return result;
+    }
+
+    private static ApplyXmlResult applyXmlIds(String xml, String tag, Map<String, Long> wanted)
+    {
+        java.util.regex.Pattern block = java.util.regex.Pattern.compile(
+            "(<" + tag + ">)(.*?)(</" + tag + ">)", java.util.regex.Pattern.DOTALL); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        java.util.regex.Matcher m = block.matcher(xml);
+        StringBuffer sb = new StringBuffer();
+        int changed = 0;
+        while (m.find())
+        {
+            String body = m.group(2);
+            java.util.regex.Matcher name = java.util.regex.Pattern.compile("<name>([^<]+)</name>").matcher(body); //$NON-NLS-1$
+            if (name.find() && wanted.containsKey(name.group(1)))
+            {
+                Long want = wanted.get(name.group(1));
+                java.util.regex.Matcher id = java.util.regex.Pattern.compile("<id>(\\d+)</id>").matcher(body); //$NON-NLS-1$
+                if (id.find() && want != null && !want.toString().equals(id.group(1)))
+                {
+                    body = id.replaceFirst("<id>" + want + "</id>"); //$NON-NLS-1$ //$NON-NLS-2$
+                    changed++;
+                }
+            }
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(m.group(1) + body + m.group(3)));
+        }
+        m.appendTail(sb);
+        return new ApplyXmlResult(sb.toString(), changed);
+    }
+
+    private static final class ApplyXmlResult
+    {
+        final String text;
+        final int changed;
+
+        ApplyXmlResult(String text, int changed)
+        {
+            this.text = text;
+            this.changed = changed;
+        }
+    }
+
     static Result checkOnly(Form form, Form baseForm)
     {
         if (form == null || baseForm == null)
