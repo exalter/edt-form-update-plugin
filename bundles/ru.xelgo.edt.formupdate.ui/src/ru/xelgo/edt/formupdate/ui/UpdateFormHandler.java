@@ -650,44 +650,41 @@ public class UpdateFormHandler
         formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
 
-        FormIdConsistency.Result result = null;
+        // Prefer XML id-align after BaseForm file sync. EMF platform-URI save on
+        // EDT 2026.2 often hits Cyclic lazy links or truncates BaseForm to 0 bytes
+        // (save truncates before write); XML matches post_form_update_hygiene.
+        FormIdConsistency.Result result;
         try
         {
-            result = alignOnceViaPlatformUri(formResource, baseFormResource);
+            result = alignOnceViaXmlFiles(formResource, baseFormResource);
             if (result.stillMismatched() || result.isCrashPatternAfter())
             {
                 formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                 baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                result = alignOnceViaPlatformUri(formResource, baseFormResource);
+                // One EMF attempt only if XML left crash-pattern and files are non-empty.
+                if (baseFormResource.getLocation() != null
+                    && baseFormResource.getLocation().toFile().length() > 0L)
+                {
+                    try
+                    {
+                        result = alignOnceViaPlatformUri(formResource, baseFormResource);
+                    }
+                    catch (Throwable emfError)
+                    {
+                        logWarning(
+                            "EMF id-align skipped after XML. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                            ownerName, formName, emfError.toString());
+                    }
+                }
             }
         }
-        catch (Throwable emfError)
+        catch (IOException xmlError)
         {
-            // Cyclic PictureRef/EventHandler on EMF load — fall back to XML id copy.
-            if (!isCyclicLazyLinks(emfError) && !(emfError instanceof IOException)
-                && !(emfError instanceof RuntimeException))
-            {
-                if (emfError instanceof Error && !(emfError instanceof AssertionError))
-                    throw (Error)emfError;
-            }
-            logWarning(
-                "EMF id-align failed — trying XML. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
-                ownerName, formName, emfError.toString());
-            try
-            {
-                result = alignOnceViaXmlFiles(formResource, baseFormResource);
-            }
-            catch (IOException xmlError)
-            {
-                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
-                    MessageFormat.format("Form/BaseForm id align failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
-                        ownerName, formName, xmlError.toString()),
-                    xmlError));
-            }
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
+                MessageFormat.format("Form/BaseForm XML id align failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                    ownerName, formName, xmlError.toString()),
+                xmlError));
         }
-
-        if (result == null)
-            return;
 
         if (result.hadMismatch())
             logWarning("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$

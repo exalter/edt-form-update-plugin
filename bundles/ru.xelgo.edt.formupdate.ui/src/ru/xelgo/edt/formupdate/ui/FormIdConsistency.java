@@ -93,8 +93,39 @@ final class FormIdConsistency
         ApplyXmlResult cmds = applyXmlIds(attrs.text, "formCommands", formCmdIds); //$NON-NLS-1$
         if (attrs.changed + cmds.changed > 0 && !cmds.text.equals(baseText))
         {
+            if (cmds.text == null || cmds.text.isEmpty())
+                throw new IOException("XML id-align refused empty BaseForm content: " + baseFormPath); //$NON-NLS-1$
             byte[] backup = Files.readAllBytes(baseFormPath);
-            Files.writeString(baseFormPath, cmds.text);
+            Path tmp = baseFormPath.resolveSibling(baseFormPath.getFileName().toString() + ".align.tmp"); //$NON-NLS-1$
+            try
+            {
+                Files.writeString(tmp, cmds.text);
+                if (Files.size(tmp) == 0L)
+                    throw new IOException("XML id-align temp write empty: " + tmp); //$NON-NLS-1$
+                try
+                {
+                    Files.move(tmp, baseFormPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                }
+                catch (java.nio.file.AtomicMoveNotSupportedException atomicUnsupported)
+                {
+                    Files.move(tmp, baseFormPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            catch (IOException e)
+            {
+                try
+                {
+                    Files.deleteIfExists(tmp);
+                }
+                catch (IOException ignored)
+                {
+                    // best-effort
+                }
+                if (Files.exists(baseFormPath) && Files.size(baseFormPath) == 0L && backup.length > 0)
+                    Files.write(baseFormPath, backup);
+                throw e;
+            }
             if (Files.size(baseFormPath) == 0L)
             {
                 Files.write(baseFormPath, backup);

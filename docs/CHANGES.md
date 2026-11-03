@@ -1,3 +1,9 @@
+## 1.0.2.v202611031640
+
+- Id-align after BaseForm sync is XML-first (EMF only if crash-pattern remains).
+- Avoids EDT 2026.2 EMF save truncating BaseForm to 0 bytes mid-align.
+- XML write via temp + replace; refuse empty content.
+
 ## 1.0.2.v202611031612
 
 - BaseForm sync: missing parent Form.form is soft skip (Updated), not Failed.
