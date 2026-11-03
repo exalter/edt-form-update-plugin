@@ -22,6 +22,20 @@
   **Updated (BaseForm file fallback)** (extension Form layer kept).
 - Batch log lines include `[Owner]` for Updated/Failed.
 
+## 2026-11-03 — stop re-listing forms after successful Update
+
+Root cause: after Update we id-align BaseForm → bytes ≠ parent; on Cyclic the
+scan used raw file compare → same forms every run. Also `updateAdopted` often
+left BaseForm content behind parent.
+
+Fix:
+
+- After every successful adopt (and on Cyclic fallback): **always** copy parent
+  `Form.form` → `BaseForm`, then id-align.
+- Write sync marker (parent SHA-256) in plugin state (not git).
+- Workspace “needs update?”: marker current → skip; else compare XML **ignoring
+  `<id>`** (not raw bytes).
+
 
 Based on [Xelgo/edt-form-update-plugin](https://github.com/Xelgo/edt-form-update-plugin)
 around commit `f3c3a69` (main).

@@ -174,6 +174,13 @@ public class UpdateFormHandler
                     {
                         updateAdoptedWithCyclicRetry(modelObjectAdopter, candidate, extensionProject, monitor,
                             formResource, baseFormResource);
+                        if (monitor.isCanceled())
+                            throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
+                        if (formResource != null)
+                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        if (baseFormResource != null)
+                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                        guard.assertNonEmpty("updateAdopted"); //$NON-NLS-1$
                     }
                     catch (CoreException adoptError)
                     {
@@ -183,46 +190,31 @@ public class UpdateFormHandler
                             throw adoptError;
                         }
                         // Full EMF adopt cannot resolve PictureRef/ColorRef cycles on EDT 2026.2+.
-                        // Restore snapshot, sync BaseForm from parent Form.form on disk, id-align.
                         guard.restore();
                         if (formResource != null)
                             formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                         if (baseFormResource != null)
                             baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                         logWarning(
-                            "Cyclic on updateAdopted after retry — BaseForm file sync from parent. Owner: {0}, form: {1}", //$NON-NLS-1$
+                            "Cyclic on updateAdopted after retry — BaseForm file sync only. Owner: {0}, form: {1}", //$NON-NLS-1$
                             candidate.getOwnerName(), candidate.getFormName());
-                        syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
-                            candidate.getFormName(), monitor);
-                        alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
-                            candidate.getFormName(), monitor);
-                        if (formResource != null)
-                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        if (baseFormResource != null)
-                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        guard.assertNonEmpty("cyclic-file-fallback"); //$NON-NLS-1$
-                        candidate.setMessage("Updated (BaseForm file fallback)"); //$NON-NLS-1$
                         fileFallback = true;
                     }
-                    if (!fileFallback)
-                    {
-                        if (monitor.isCanceled())
-                            throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
-                        if (formResource != null)
-                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        if (baseFormResource != null)
-                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        guard.assertNonEmpty("updateAdopted"); //$NON-NLS-1$
-                        alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
-                            candidate.getFormName(), monitor);
-                        if (formResource != null)
-                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        if (baseFormResource != null)
-                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        guard.assertNonEmpty("id-align"); //$NON-NLS-1$
-                        candidate.setMessage(
-                            valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
-                    }
+                    // Always force BaseForm = parent Form.form on disk, then id-align.
+                    // updateAdopted alone often leaves BaseForm behind parent; id-align then
+                    // makes raw bytes ≠ parent and the form reappears on every scan.
+                    syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(), candidate.getFormName(),
+                        monitor);
+                    alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
+                    if (formResource != null)
+                        formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    if (baseFormResource != null)
+                        baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                    guard.assertNonEmpty(fileFallback ? "cyclic-file-fallback" : "id-align"); //$NON-NLS-1$ //$NON-NLS-2$
+                    writeParentSyncMarker(extensionProject, candidate.getOwnerName(), candidate.getFormName());
+                    candidate.setMessage(fileFallback ? "Updated (BaseForm file fallback)" //$NON-NLS-1$
+                        : valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
                     committed = true;
                     logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}", //$NON-NLS-1$
                         candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback));
@@ -817,9 +809,10 @@ public class UpdateFormHandler
     }
 
     /**
-     * Compare extension BaseForm/Form.form bytes to parent configuration Form.form.
-     * Used when EMF ExtensionEqualityHelper fails (cyclic lazy links on EDT 2026.2+).
-     * If either file is missing, prefer update (true) over silent skip.
+     * Compare extension BaseForm to parent Form.form when EMF equality fails (Cyclic).
+     * <p>
+     * Order: sync-marker (parent digest from last successful Update) → id-stripped XML
+     * equality → otherwise update required. Raw byte equality is wrong after id-align.
      */
     private boolean isFormUpdateRequiredByWorkspaceFiles(IExtensionProject extensionProject, String ownerName,
         String formName)
@@ -845,15 +838,26 @@ public class UpdateFormHandler
                 ownerName, formName, baseFormResource, parentFormResource);
             return true;
         }
+        Path basePath = baseFormResource.getLocation().toFile().toPath();
+        Path parentPath = parentFormResource.getLocation().toFile().toPath();
         try
         {
-            byte[] baseBytes = Files.readAllBytes(baseFormResource.getLocation().toFile().toPath());
-            byte[] parentBytes = Files.readAllBytes(parentFormResource.getLocation().toFile().toPath());
-            boolean equal = Arrays.equals(baseBytes, parentBytes);
+            if (FormUpdateSyncMarker.isCurrent(extensionProject.getProject(), ownerSimple, formName, parentPath))
+            {
+                logInfo(
+                    "Workspace file compare. Owner: {0}, form: {1}, syncMarker: current → skip", //$NON-NLS-1$
+                    ownerName, formName);
+                return false;
+            }
+            byte[] baseBytes = Files.readAllBytes(basePath);
+            byte[] parentBytes = Files.readAllBytes(parentPath);
+            boolean equalIgnoringIds = FormUpdateSyncMarker.equalIgnoringIds(baseBytes, parentBytes);
             logInfo(
-                "Workspace file compare. Owner: {0}, form: {1}, equal: {2}, baseBytes: {3}, parentBytes: {4}", //$NON-NLS-1$
-                ownerName, formName, equal, baseBytes.length, parentBytes.length);
-            return !equal;
+                "Workspace file compare. Owner: {0}, form: {1}, equalIgnoringIds: {2}, rawEqual: {3}, baseBytes: {4}, parentBytes: {5}", //$NON-NLS-1$
+                ownerName, formName, Boolean.valueOf(equalIgnoringIds),
+                Boolean.valueOf(Arrays.equals(baseBytes, parentBytes)), Integer.valueOf(baseBytes.length),
+                Integer.valueOf(parentBytes.length));
+            return !equalIgnoringIds;
         }
         catch (IOException e)
         {
@@ -861,6 +865,28 @@ public class UpdateFormHandler
                 "Workspace file compare failed. Owner: {0}, form: {1}, error: {2} → assume update", //$NON-NLS-1$
                 ownerName, formName, e.toString());
             return true;
+        }
+    }
+
+    private void writeParentSyncMarker(IExtensionProject extensionProject, String ownerName, String formName)
+    {
+        IV8Project parentProject = extensionProject.getParent();
+        if (parentProject == null || parentProject.getProject() == null)
+            return;
+        String ownerSimple = getOwnerSimpleName(ownerName);
+        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerSimple, formName,
+            false);
+        if (parentFormResource == null || parentFormResource.getLocation() == null)
+            return;
+        try
+        {
+            FormUpdateSyncMarker.write(extensionProject.getProject(), ownerSimple, formName,
+                parentFormResource.getLocation().toFile().toPath());
+        }
+        catch (IOException e)
+        {
+            logWarning("Failed to write sync marker. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                e.toString());
         }
     }
 
