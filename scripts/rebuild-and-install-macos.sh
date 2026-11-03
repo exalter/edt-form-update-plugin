@@ -34,6 +34,13 @@ javac --release 17 -cp "$(cat "$WORK/cp.txt")" -d "$WORK/classes" $(find "$SRC/r
 cd "$WORK/jarpack"
 jar xf "$BASE_JAR"
 cp -R "$WORK/classes/ru" .
+# NLS properties live next to Java sources (not compiled)
+find "$SRC/ru" -name '*.properties' -print0 | while IFS= read -r -d '' f; do
+  rel="${f#"$SRC/"}"
+  mkdir -p "$(dirname "$rel")"
+  cp -f "$f" "$rel"
+done
+
 python3 - "$VER" <<'PY'
 import re, sys
 from pathlib import Path

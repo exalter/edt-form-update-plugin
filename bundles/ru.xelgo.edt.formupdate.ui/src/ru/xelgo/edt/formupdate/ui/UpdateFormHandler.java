@@ -41,6 +41,7 @@ import org.eclipse.jface.dialogs.ProgressMonitorDialog;
 import org.eclipse.jface.operation.IRunnableWithProgress;
 import org.eclipse.jface.viewers.LabelProvider;
 import org.eclipse.jface.window.Window;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.ui.IWorkbenchPage;
 import org.eclipse.ui.IWorkbenchWindow;
@@ -1180,8 +1181,8 @@ public class UpdateFormHandler
 
     private IExtensionProject selectExtensionProject(ExecutionEvent event, IV8ProjectManager v8ProjectManager)
     {
-        List<IExtensionProject> extensionProjects = new ArrayList<>(
-            v8ProjectManager.getProjects(IExtensionProject.class));
+        // After EDT restart V8 project manager can be empty while context activates.
+        List<IExtensionProject> extensionProjects = waitForExtensionProjects(v8ProjectManager, 90);
         extensionProjects.sort((first, second) -> getProjectName(first).compareToIgnoreCase(
             getProjectName(second)));
         logInfo("Available extension project count: {0}", extensionProjects.size()); //$NON-NLS-1$
@@ -1272,6 +1273,49 @@ public class UpdateFormHandler
             owner = owner.eContainer();
         }
         return ""; //$NON-NLS-1$
+    }
+
+    /**
+     * After EDT restart {@link IV8ProjectManager#getProjects} can return empty while
+     * project context is still activating even though Navigator already shows extensions.
+     */
+    private List<IExtensionProject> waitForExtensionProjects(IV8ProjectManager v8ProjectManager, int timeoutSec)
+    {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(Math.max(1, timeoutSec));
+        List<IExtensionProject> projects = new ArrayList<>();
+        Display display = Display.getCurrent();
+        if (display == null)
+            display = Display.getDefault();
+        while (System.nanoTime() < deadline)
+        {
+            projects = new ArrayList<>(v8ProjectManager.getProjects(IExtensionProject.class));
+            if (!projects.isEmpty())
+                return projects;
+            logInfo("Waiting for extension projects to appear in V8 project manager"); //$NON-NLS-1$
+            if (display != null && !display.isDisposed())
+            {
+                // Pump UI so activation jobs can finish; avoid freezing the shell.
+                long sliceEnd = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(500);
+                while (System.nanoTime() < sliceEnd && !display.isDisposed())
+                {
+                    if (!display.readAndDispatch())
+                        display.sleep();
+                }
+            }
+            else
+            {
+                try
+                {
+                    Thread.sleep(500);
+                }
+                catch (InterruptedException e)
+                {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return projects;
     }
 
     private void showInfo(ExecutionEvent event, String message)

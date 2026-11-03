@@ -1,5 +1,12 @@
 # Changes vs upstream Xelgo
 
+## 2026-11-03 — wait for V8 extension projects after restart
+
+- `selectExtensionProject`: poll `IV8ProjectManager` up to 90s (UI pump) so
+  early menu open after restart does not show empty-workspace false negative.
+- Clearer `NoExtensionProject` message (wait for context activation).
+
+
 Based on [Xelgo/edt-form-update-plugin](https://github.com/Xelgo/edt-form-update-plugin)
 around commit `f3c3a69` (main).
 
