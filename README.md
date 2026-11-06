@@ -29,6 +29,7 @@ Upstream давно без релизов; на EDT 2026.2 стоковый пл
 | `ExtensionEqualityHelper` → Cyclic lazy links → пустой список | Fallback: сравнение `BaseForm/Form.form` с parent `Form.form` на диске |
 | EMF «разные», EDT compare пустой/висит | Тоже подтверждение через workspace-файлы |
 | После Update Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: копирует id атрибутов/команд Form → BaseForm |
+| После Update: Adopted ТЧ + Own-реквизит уже из родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell по uuid родителя |
 
 Проверено: EDT **2026.2**, пакетный Update (~129 форм), `Updated: N. Failed: 0`.
 

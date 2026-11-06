@@ -207,6 +207,8 @@ public class UpdateFormHandler
                         candidate.getFormName(), monitor);
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
+                    // updateAdopted may borrow Adopted ТЧ but leave attributes Own → duplicate parent.
+                    convertOwnAttributesPresentInParent(extensionProject, candidate.getOwnerName(), monitor);
                     if (formResource != null)
                         formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                     if (baseFormResource != null)
@@ -853,6 +855,100 @@ public class UpdateFormHandler
         }
         throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
             "CYCLIC_LAZY_LINKS: " + (last != null ? last.toString() : "unknown"), last)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * After form Update: Own attributes in the object {@code .mdo} that already exist in the
+     * parent configuration become Adopted shells (keep ТЧ; do not delete). Soft on missing
+     * parent / IO — do not fail the form row.
+     */
+    private void convertOwnAttributesPresentInParent(IExtensionProject extensionProject, String ownerName,
+        IProgressMonitor monitor)
+    {
+        IV8Project parentProject = extensionProject.getParent();
+        if (parentProject == null || parentProject.getProject() == null)
+        {
+            logWarning("Own→Adopted skipped (no parent project). Owner: {0}", ownerName); //$NON-NLS-1$
+            return;
+        }
+        IResource extensionMdo = findWorkspaceOwnerMdo(extensionProject.getProject(), ownerName);
+        IResource parentMdo = findWorkspaceOwnerMdo(parentProject.getProject(), ownerName);
+        if (extensionMdo == null || extensionMdo.getLocation() == null || parentMdo == null
+            || parentMdo.getLocation() == null)
+        {
+            logWarning(
+                "Own→Adopted skipped (object .mdo missing). Owner: {0}, extension: {1}, parent: {2}", //$NON-NLS-1$
+                ownerName, extensionMdo, parentMdo);
+            return;
+        }
+        Path extensionPath = extensionMdo.getLocation().toFile().toPath();
+        Path parentPath = parentMdo.getLocation().toFile().toPath();
+        try
+        {
+            ParentAttributeAdoptFix.Result result = ParentAttributeAdoptFix.fixFile(extensionPath, parentPath);
+            if (result.converted > 0)
+            {
+                extensionMdo.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                logInfo("Own→Adopted attributes from parent. Owner: {0}, count: {1}", ownerName, //$NON-NLS-1$
+                    Integer.valueOf(result.converted));
+            }
+        }
+        catch (Exception e)
+        {
+            logWarning("Own→Adopted failed (soft). Owner: {0}, error: {1}", ownerName, e.toString()); //$NON-NLS-1$
+        }
+    }
+
+    /**
+     * Resolve object {@code OwnerName.mdo} under {@code owner} (qualified or simple).
+     */
+    private IResource findWorkspaceOwnerMdo(IProject project, String owner)
+    {
+        if (project == null)
+            return null;
+
+        String ownerSimple = getOwnerSimpleName(owner);
+        String typeFolder = metadataTypeFolder(owner);
+        if (ownerSimple == null || ownerSimple.isEmpty())
+            return null;
+
+        String suffix = "/" + ownerSimple + "/" + ownerSimple + ".mdo"; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        List<IResource> matches = new ArrayList<>();
+        try
+        {
+            project.accept((IResourceVisitor)resource -> {
+                if (resource.getType() != IResource.FILE || !"mdo".equalsIgnoreCase(resource.getFileExtension())) //$NON-NLS-1$
+                    return true;
+
+                String path = resource.getProjectRelativePath().toString().replace('\\', '/'); //$NON-NLS-1$
+                if (!path.endsWith(suffix))
+                    return true;
+                if (typeFolder != null && !path.contains("/" + typeFolder + "/" + ownerSimple + "/")) //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                    return true;
+
+                matches.add(resource);
+                return true;
+            });
+        }
+        catch (CoreException e)
+        {
+            logError(e);
+            return null;
+        }
+
+        if (matches.isEmpty())
+        {
+            logWarning("Workspace object .mdo was not found. Owner: {0}, project: {1}", owner, //$NON-NLS-1$
+                project.getName());
+            return null;
+        }
+        if (matches.size() > 1)
+        {
+            logWarning("Workspace object .mdo lookup is ambiguous. Owner: {0}, matches: {1}", owner, //$NON-NLS-1$
+                Integer.valueOf(matches.size()));
+            return null;
+        }
+        return matches.get(0);
     }
 
     /**

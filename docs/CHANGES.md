@@ -1,3 +1,16 @@
+## 1.0.2.v20261106 — Own→Adopted for parent attributes after Update
+
+- After each form Update: scan object `.mdo`. If `updateAdopted` borrowed an
+  Adopted ТЧ but left an attribute as Own (type/synonym, no
+  `objectBelonging=Adopted`) while the same name exists in the parent at that
+  scope — rewrite to an Adopted shell
+  (`extendedConfigurationObject` = parent attribute uuid +
+  `BasicFeatureExtension` / Checked). Keeps the ТЧ; does not delete it.
+- True extension-only Own attributes (not in parent) stay Own.
+- Soft on missing parent `.mdo` / IO — form row still Updated.
+- Case: `Documents/СведенияОбУдержанномНДФЛ` ТЧ `НДФЛ` / `ЦФГ_СчетУчета`
+  (Jenkins CFE duplicate after form Update).
+
 ## 1.0.2.1.0.2.v202611031743 (relist fix)
 
 - Update detector: when EMF BaseForm ≠ fresh adopt, decide only via sync-marker /
