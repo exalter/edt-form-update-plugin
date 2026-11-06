@@ -46,12 +46,23 @@ final class BatchUpdateFormsDialog
 
         void update(FormUpdateCandidate candidate, IProgressMonitor monitor) throws CoreException;
 
+        /**
+         * Write parent sync markers only (no adopt). Use when Form/BaseForm were
+         * cleaned by hand and must not reappear until the parent Form.form changes.
+         */
+        default void acceptAsSynced(FormUpdateCandidate candidate) throws CoreException
+        {
+            // optional
+        }
+
         /** Best-effort restore of Form/BaseForm after a timed-out / abandoned update. */
         default void abortAndRestore(FormUpdateCandidate candidate)
         {
             // optional
         }
     }
+
+    private static final int ACCEPT_ID = 42;
 
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss"); //$NON-NLS-1$
     /** Per-form wall clock; override with -Dru.xelgo.edt.formupdate.perFormTimeoutSec=N */
@@ -64,6 +75,7 @@ final class BatchUpdateFormsDialog
     private ProgressBar progressBar;
     private Text logText;
     private org.eclipse.swt.widgets.Button updateButton;
+    private org.eclipse.swt.widgets.Button acceptButton;
     private org.eclipse.swt.widgets.Button closeButton;
     private boolean updating;
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
@@ -81,7 +93,7 @@ final class BatchUpdateFormsDialog
         super.create();
         setTitle(valueOrDefault(Messages.BatchUpdateFormsDialog_Title, "Update Extension Forms")); //$NON-NLS-1$
         setMessage(valueOrDefault(Messages.BatchUpdateFormsDialog_Message,
-            "Select extension forms to update from the source configuration.")); //$NON-NLS-1$
+            "Select forms to Update from parent, or Accept to keep the current Form/BaseForm and hide until parent changes.")); //$NON-NLS-1$
     }
 
     @Override
@@ -204,13 +216,74 @@ final class BatchUpdateFormsDialog
     {
         updateButton = createButton(parent, IDialogConstants.OK_ID,
             valueOrDefault(Messages.BatchUpdateFormsDialog_UpdateButton, "Update"), true); //$NON-NLS-1$
+        acceptButton = createButton(parent, ACCEPT_ID, "Accept (no Update)", false); //$NON-NLS-1$
         closeButton = createButton(parent, IDialogConstants.CANCEL_ID, IDialogConstants.CLOSE_LABEL, false);
+    }
+
+    @Override
+    protected void buttonPressed(int buttonId)
+    {
+        if (buttonId == ACCEPT_ID)
+        {
+            startAcceptAsSynced();
+            return;
+        }
+        super.buttonPressed(buttonId);
     }
 
     @Override
     protected void okPressed()
     {
         startUpdate();
+    }
+
+    private void startAcceptAsSynced()
+    {
+        List<FormUpdateCandidate> selectedCandidates = getSelectedCandidates();
+        if (selectedCandidates.isEmpty())
+        {
+            appendLog(valueOrDefault(Messages.UpdateFormHandler_NoSelection, "No forms were selected for update.")); //$NON-NLS-1$
+            return;
+        }
+        updating = true;
+        updateButton.setEnabled(false);
+        acceptButton.setEnabled(false);
+        viewer.getTable().setEnabled(false);
+        appendLog(MessageFormat.format("Accept as synced (markers only). Selected: {0}", //$NON-NLS-1$
+            Integer.valueOf(selectedCandidates.size())));
+        int ok = 0;
+        int failed = 0;
+        for (FormUpdateCandidate candidate : selectedCandidates)
+        {
+            try
+            {
+                updateOperation.acceptAsSynced(candidate);
+                ok++;
+                setCandidateStatus(candidate, FormUpdateCandidate.Status.SUCCESS,
+                    candidate.getMessage().isEmpty() ? "Accepted (sync marker only)" : candidate.getMessage()); //$NON-NLS-1$
+                appendLog(MessageFormat.format("Accepted: {0} [{1}]", candidate.getFormName(), //$NON-NLS-1$
+                    candidate.getOwnerName()));
+            }
+            catch (CoreException e)
+            {
+                failed++;
+                setCandidateStatus(candidate, FormUpdateCandidate.Status.FAILED, getErrorMessage(e));
+                appendLog(MessageFormat.format("Accept failed: {0} [{1}]. {2}", candidate.getFormName(), //$NON-NLS-1$
+                    candidate.getOwnerName(), getErrorMessage(e)));
+            }
+        }
+        appendLog(MessageFormat.format("Accept finished. OK: {0}. Failed: {1}.", Integer.valueOf(ok), //$NON-NLS-1$
+            Integer.valueOf(failed)));
+        updating = false;
+        updateButton.setEnabled(true);
+        acceptButton.setEnabled(true);
+        viewer.getTable().setEnabled(true);
+        // Drop accepted rows from the table so the operator sees an empty-enough list.
+        candidates.removeIf(c -> c.getStatus() == FormUpdateCandidate.Status.SUCCESS);
+        viewer.setInput(candidates);
+        viewer.refresh();
+        if (candidates.isEmpty())
+            setMessage("All selected forms accepted. Close and reopen — list should stay empty until parent Form.form changes."); //$NON-NLS-1$
     }
 
     @Override
@@ -243,6 +316,8 @@ final class BatchUpdateFormsDialog
         updating = true;
         cancelRequested.set(false);
         updateButton.setEnabled(false);
+        if (acceptButton != null)
+            acceptButton.setEnabled(false);
         // Close stays enabled so a hang cannot trap the operator forever.
         closeButton.setEnabled(true);
         viewer.getTable().setEnabled(false);
@@ -385,6 +460,8 @@ final class BatchUpdateFormsDialog
                 return;
             updating = false;
             updateButton.setEnabled(true);
+            if (acceptButton != null)
+                acceptButton.setEnabled(true);
             closeButton.setEnabled(true);
             viewer.getTable().setEnabled(true);
             String summary = format(Messages.UpdateFormHandler_Summary, "Updated: {0}. Failed: {1}.", updated, failed); //$NON-NLS-1$

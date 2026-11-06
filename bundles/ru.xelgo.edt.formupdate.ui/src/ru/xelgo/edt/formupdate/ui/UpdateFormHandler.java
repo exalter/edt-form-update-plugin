@@ -155,6 +155,17 @@ public class UpdateFormHandler
             }
 
             @Override
+            public void acceptAsSynced(FormUpdateCandidate candidate) throws CoreException
+            {
+                // Operator already cleaned Form/BaseForm (e.g. MR hygiene): remember parent
+                // digest so the dialog does not re-list until the parent Form.form changes.
+                writeParentSyncMarker(extensionProject, candidate.getOwnerName(), candidate.getFormName());
+                candidate.setMessage("Accepted (sync marker only)"); //$NON-NLS-1$
+                logInfo("Accepted as synced (marker only). Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
+                    candidate.getFormName());
+            }
+
+            @Override
             public void update(FormUpdateCandidate candidate, IProgressMonitor monitor) throws CoreException
             {
                 String key = guardKey(candidate);
@@ -452,8 +463,9 @@ public class UpdateFormHandler
         }
 
         boolean updatable = modelObjectAdopter.isUpdatable(sourceForm, extensionProject);
-        boolean changed = isFormUpdateRequired(extensionProject, modelObjectAdopter, adoptedForm, sourceForm, ownerName,
+        String reason = updateRequiredReason(extensionProject, modelObjectAdopter, adoptedForm, sourceForm, ownerName,
             formName);
+        boolean changed = reason != null;
         logInfo(
             "BasicForm fallback check. Owner: {0}, form: {1}, updatable: {2}, changed: {3}, adoptedForm: {4}, sourceForm: {5}, sourceMdForm: {6}", //$NON-NLS-1$
             ownerName, formName, updatable, changed, describeEObject(adoptedForm), describeEObject(sourceForm),
@@ -461,7 +473,9 @@ public class UpdateFormHandler
         if (!updatable || !changed)
             return;
 
-        candidates.add(new FormUpdateCandidate(sourceForm, formName, ownerName));
+        FormUpdateCandidate candidate = new FormUpdateCandidate(sourceForm, formName, ownerName);
+        candidate.setMessage(reason);
+        candidates.add(candidate);
     }
 
     private Form loadSiblingForm(BasicForm mdForm)
@@ -637,8 +651,39 @@ public class UpdateFormHandler
     private boolean isFormUpdateRequired(IExtensionProject extensionProject, IModelObjectAdopter modelObjectAdopter,
         Form adoptedForm, Form sourceForm, String ownerName, String formName)
     {
+        return updateRequiredReason(extensionProject, modelObjectAdopter, adoptedForm, sourceForm, ownerName,
+            formName) != null;
+    }
+
+    /**
+     * {@code null} = do not list; otherwise short reason for the Message column.
+     */
+    private String updateRequiredReason(IExtensionProject extensionProject, IModelObjectAdopter modelObjectAdopter,
+        Form adoptedForm, Form sourceForm, String ownerName, String formName)
+    {
         try
         {
+            // Fast path before expensive EMF adopt: project-local / legacy sync marker.
+            Path parentPath = resolveParentFormPath(extensionProject, ownerName, formName);
+            if (parentPath != null)
+            {
+                try
+                {
+                    if (FormUpdateSyncMarker.isCurrent(extensionProject.getProject(), ownerName, formName, parentPath))
+                    {
+                        logInfo(
+                            "Vendor form update check. Owner: {0}, form: {1}, syncMarker: current → skip", //$NON-NLS-1$
+                            ownerName, formName);
+                        return null;
+                    }
+                }
+                catch (IOException e)
+                {
+                    logWarning("Sync marker read failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                        e.toString());
+                }
+            }
+
             Form currentBaseForm = adoptedForm != null ? adoptedForm.getBaseForm() : null;
             if (currentBaseForm == null)
                 currentBaseForm = loadBaseForm(adoptedForm, extensionProject, ownerName, formName);
@@ -667,6 +712,7 @@ public class UpdateFormHandler
                 }
             }
             boolean updateRequired = false;
+            String reason = null;
             if (sourceAdopted && currentBaseForm != null && freshBaseForm != null && !baseEqual)
             {
                 // After BaseForm sync + id-align, EMF almost always reports unequal
@@ -674,9 +720,10 @@ public class UpdateFormHandler
                 // Disk marker / equalIgnoringIds is authoritative — do not let EDT
                 // compare alone re-list every form after a successful Update.
                 updateRequired = isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName);
+                if (updateRequired)
+                    reason = equalityFailed ? "BaseForm ≠ parent (EMF Cyclic)" : "BaseForm ≠ parent"; //$NON-NLS-1$ //$NON-NLS-2$
                 if (updateRequired && !equalityFailed)
                 {
-                    // Optional soft signal only; files already decided.
                     logInfo(
                         "EMF base unequal; workspace files require update. Owner: {0}, form: {1}", //$NON-NLS-1$
                         ownerName, formName);
@@ -686,14 +733,27 @@ public class UpdateFormHandler
                 "Vendor form update check. Owner: {0}, form: {1}, sourceAdopted: {2}, baseEqual: {3}, equalityFailed: {4}, updateRequired: {5}, currentBaseForm: {6}, freshBaseForm: {7}", //$NON-NLS-1$
                 ownerName, formName, sourceAdopted, baseEqual, equalityFailed, updateRequired,
                 describeEObject(currentBaseForm), describeEObject(freshBaseForm));
-            return updateRequired;
+            return updateRequired ? reason : null;
         }
         catch (RuntimeException | AssertionError e)
         {
             logWarning("Vendor form update check failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
                 ownerName, formName, e.toString());
-            return false;
+            return null;
         }
+    }
+
+    private Path resolveParentFormPath(IExtensionProject extensionProject, String ownerName, String formName)
+    {
+        IV8Project parentProject = extensionProject.getParent();
+        if (parentProject == null || parentProject.getProject() == null)
+            return null;
+        IResource parentFormResource = findWorkspaceFormResource(parentProject.getProject(), ownerName, formName,
+            false);
+        if (parentFormResource == null || parentFormResource.getLocation() == null)
+            return null;
+        Path path = parentFormResource.getLocation().toFile().toPath();
+        return Files.isRegularFile(path) ? path : null;
     }
 
     /**
@@ -1594,8 +1654,9 @@ public class UpdateFormHandler
         }
 
         boolean updatable = modelObjectAdopter.isUpdatable(sourceForm, extensionProject);
-        boolean changed = isFormUpdateRequired(extensionProject, modelObjectAdopter, adoptedForm, sourceForm, ownerName,
+        String reason = updateRequiredReason(extensionProject, modelObjectAdopter, adoptedForm, sourceForm, ownerName,
             formName);
+        boolean changed = reason != null;
         logCandidateCheck("Form", ownerName, formName, adoptedForm, sourceForm, sourceMdForm, updatable, changed); //$NON-NLS-1$
         logInfo(
             "Form checked. Owner: {0}, form: {1}, mdClass: {2}, sourceMdClass: {3}, sourceClass: {4}, updatable: {5}", //$NON-NLS-1$
@@ -1608,8 +1669,11 @@ public class UpdateFormHandler
             return;
         }
 
-        candidates.add(new FormUpdateCandidate(sourceForm, formName, ownerName));
-        logInfo("Candidate added. Owner: {0}, form: {1}, updatable: {2}", ownerName, formName, updatable); //$NON-NLS-1$
+        FormUpdateCandidate candidate = new FormUpdateCandidate(sourceForm, formName, ownerName);
+        candidate.setMessage(reason);
+        candidates.add(candidate);
+        logInfo("Candidate added. Owner: {0}, form: {1}, updatable: {2}, reason: {3}", ownerName, formName, //$NON-NLS-1$
+            updatable, reason);
     }
 
     private void collectFormSafely(EObject object, IExtensionProject extensionProject,
