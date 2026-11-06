@@ -30,6 +30,7 @@ Upstream давно без релизов; на EDT 2026.2 стоковый пл
 | EMF «разные», EDT compare пустой/висит | Тоже подтверждение через workspace-файлы |
 | После Update Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: копирует id атрибутов/команд Form → BaseForm |
 | После Update: Adopted ТЧ + Own-реквизит уже из родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell по uuid родителя |
+| После Update: ссылки на команды/роли/ФО, которых нет в CFE → ibcmd/Jenkins | `ExtensionMissingRefCleaner`: вырезает незаимствованные refs из Form/BaseForm |
 
 Проверено: EDT **2026.2**, пакетный Update (~129 форм), `Updated: N. Failed: 0`.
 

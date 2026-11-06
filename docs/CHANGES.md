@@ -1,3 +1,16 @@
+## 1.0.2.v20261106b — strip missing extension refs after Update
+
+- After BaseForm sync + id-align: remove from Form and BaseForm XML
+  `<commandName>` / `<role>` / `<functionalOptions>` that point at metadata
+  **not** present in the extension project. Keep `Form.*` command names.
+  Leave command-interface `<command>` rows alone.
+- Index built once per batch from extension `src/**/*.mdo` (+ `Commands/`).
+- Soft on IO; status message appends `stripped missing refs=N`.
+- Parent sync marker still uses raw parent digest — sanitized BaseForm must
+  not re-list forever.
+- Case: MR orticon_cfe !1935 (`Контрагенты` SPARK/ПроверкаКонтрагента,
+  unadopted FO/roles on document forms).
+
 ## 1.0.2.v20261106 — Own→Adopted for parent attributes after Update
 
 - After each form Update: scan object `.mdo`. If `updateAdopted` borrowed an

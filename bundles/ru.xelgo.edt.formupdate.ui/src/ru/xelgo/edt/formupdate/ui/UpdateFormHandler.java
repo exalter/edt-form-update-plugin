@@ -145,6 +145,7 @@ public class UpdateFormHandler
 
         Shell shell = HandlerUtil.getActiveShell(event);
         ConcurrentHashMap<String, FormWorkspaceGuard> activeGuards = new ConcurrentHashMap<>();
+        AtomicReference<ExtensionMissingRefCleaner> missingRefCleaner = new AtomicReference<>();
         BatchUpdateFormsDialog dialog = new BatchUpdateFormsDialog(shell, candidates, new BatchUpdateFormsDialog.UpdateOperation()
         {
             @Override
@@ -207,6 +208,9 @@ public class UpdateFormHandler
                         candidate.getFormName(), monitor);
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
+                    // Drop refs to commands/roles/FO not present in the extension (MR-1935 class).
+                    int stripped = stripMissingExtensionRefs(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), missingRefCleaner, monitor);
                     // updateAdopted may borrow Adopted ТЧ but leave attributes Own → duplicate parent.
                     convertOwnAttributesPresentInParent(extensionProject, candidate.getOwnerName(), monitor);
                     if (formResource != null)
@@ -227,6 +231,8 @@ public class UpdateFormHandler
                     else
                         candidate.setMessage(
                             valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
+                    if (stripped > 0)
+                        candidate.setMessage(candidate.getMessage() + "; stripped missing refs=" + stripped); //$NON-NLS-1$
                     committed = true;
                     logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}, synced: {3}", //$NON-NLS-1$
                         candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback),
@@ -855,6 +861,60 @@ public class UpdateFormHandler
         }
         throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
             "CYCLIC_LAZY_LINKS: " + (last != null ? last.toString() : "unknown"), last)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * After BaseForm sync: remove commandName/role/functionalOptions that point at
+     * metadata absent from the extension. Soft on errors. Marker still keys off parent digest.
+     *
+     * @return number of XML elements removed across Form + BaseForm
+     */
+    private int stripMissingExtensionRefs(IExtensionProject extensionProject, String ownerName, String formName,
+        AtomicReference<ExtensionMissingRefCleaner> cleanerRef, IProgressMonitor monitor)
+    {
+        try
+        {
+            ExtensionMissingRefCleaner cleaner = cleanerRef.get();
+            if (cleaner == null)
+            {
+                cleaner = ExtensionMissingRefCleaner.build(extensionProject.getProject());
+                cleanerRef.compareAndSet(null, cleaner);
+                cleaner = cleanerRef.get();
+                logInfo("Extension metadata index for missing-ref clean: {0} refs", //$NON-NLS-1$
+                    Integer.valueOf(cleaner.knownSize()));
+            }
+            int removed = 0;
+            IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                false);
+            IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                true);
+            if (formResource != null && formResource.getLocation() != null)
+            {
+                ExtensionMissingRefCleaner.Result r = cleaner
+                    .cleanFile(formResource.getLocation().toFile().toPath());
+                removed += r.removed;
+                if (r.removed > 0)
+                    formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+            }
+            if (baseFormResource != null && baseFormResource.getLocation() != null)
+            {
+                ExtensionMissingRefCleaner.Result r = cleaner
+                    .cleanFile(baseFormResource.getLocation().toFile().toPath());
+                removed += r.removed;
+                if (r.removed > 0)
+                    baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+            }
+            if (removed > 0)
+                logInfo("Stripped missing extension refs. Owner: {0}, form: {1}, removed: {2}", ownerName, //$NON-NLS-1$
+                    formName, Integer.valueOf(removed));
+            return removed;
+        }
+        catch (Exception e)
+        {
+            logWarning("Missing-ref clean failed (soft). Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                e.toString());
+            return 0;
+        }
     }
 
     /**
