@@ -1,15 +1,19 @@
-## 1.0.2.v20261107 — project-local sync markers + Accept
+## 1.0.2.v20261107b — markers workspace-only (never CFE tree)
 
-- Sync markers SoT:
-  `Ортикон.ЦФГ/.settings/ru.xelgo.edt.formupdate.ui/parent-sync/` (survives
-  EDT `-data` / workspace switch). Workspace `.metadata` markers still
-  written/read as fallback.
+- Revert project-local `.settings/ru.xelgo…/parent-sync/` write/read. Product
+  extension repos must not get plugin side files (Ортикон.ЦФГ is a symlink
+  into git). SoT = workspace
+  `.metadata/.plugins/ru.xelgo.edt.formupdate.ui/parent-sync/` only.
+- Changing EDT `-data` loses markers → Accept / Update again.
+
+## 1.0.2.v20261107 — Accept without Update + scan reasons
+
 - Scan checks marker **before** EMF `adopt` (fast skip; fewer Cyclic warnings).
 - Message column shows why a form is listed (`BaseForm ≠ parent`, …).
-- Dialog button **Accept (no Update)**: write markers for selected forms
-  without adopt — for hand-cleaned Form/BaseForm (MR hygiene) so they stay
-  hidden until parent `Form.form` changes.
-- Gitignore markers under CFE `.settings/ru.xelgo.edt.formupdate.ui/`.
+- Dialog button **Accept (no Update)**: write **workspace** markers for
+  selected forms without adopt — hand-cleaned Form/BaseForm stay hidden until
+  parent `Form.form` changes.
+- (Withdrawn) project-local markers under CFE `.settings/` — see v20261107b.
 
 ## 1.0.2.v20261106b — strip missing extension refs after Update
 

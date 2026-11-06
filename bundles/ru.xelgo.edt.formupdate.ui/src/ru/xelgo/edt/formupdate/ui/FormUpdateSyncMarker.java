@@ -6,8 +6,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.regex.Pattern;
 
 import org.eclipse.core.resources.IProject;
@@ -20,14 +18,14 @@ import org.osgi.framework.FrameworkUtil;
  * Remembers which parent {@code Form.form} digest was last accepted for an
  * extension form (after Update, or via Accept-without-Update).
  * <p>
- * SoT is <strong>project-local</strong>
- * {@code .settings/ru.xelgo.edt.formupdate.ui/parent-sync/} so markers survive
- * EDT {@code -data} / workspace switches when the same CFE project is linked.
- * Workspace plugin-state {@code parent-sync/} is still written and read as a
- * fallback (legacy).
+ * SoT is <strong>workspace-only</strong> Eclipse plugin state
+ * ({@code .metadata/.plugins/ru.xelgo.edt.formupdate.ui/parent-sync/}). Never
+ * write under the extension project tree — product CFE repos must stay free of
+ * plugin side files.
  * <p>
  * After id-align / missing-ref sanitize, BaseForm bytes often ≠ parent; without
- * a marker the dialog would re-list forever.
+ * a marker the dialog would re-list forever. Changing EDT {@code -data} loses
+ * markers (Accept / Update again) — that is intentional.
  */
 final class FormUpdateSyncMarker
 {
@@ -43,36 +41,36 @@ final class FormUpdateSyncMarker
     {
         if (extensionProject == null || parentFormPath == null || !Files.isRegularFile(parentFormPath))
             return;
+        Path dir = workspaceStateDir();
+        if (dir == null)
+            return;
         String digest = sha256Hex(Files.readAllBytes(parentFormPath)) + "\n"; //$NON-NLS-1$
         for (String key : ownerKeys(ownerKey))
         {
-            for (Path dir : markerDirs(extensionProject))
-            {
-                Path marker = markerFileIn(dir, extensionProject.getName(), key, formName);
-                Files.createDirectories(marker.getParent());
-                Files.writeString(marker, digest, StandardCharsets.US_ASCII);
-            }
+            Path marker = markerFileIn(dir, extensionProject.getName(), key, formName);
+            Files.createDirectories(marker.getParent());
+            Files.writeString(marker, digest, StandardCharsets.US_ASCII);
         }
     }
 
-    /** {@code true} when any project-local or legacy marker matches current parent digest. */
+    /** {@code true} when a workspace marker matches the current parent digest. */
     static boolean isCurrent(IProject extensionProject, String ownerKey, String formName, Path parentFormPath)
         throws IOException
     {
         if (extensionProject == null || parentFormPath == null || !Files.isRegularFile(parentFormPath))
             return false;
+        Path dir = workspaceStateDir();
+        if (dir == null)
+            return false;
         String expected = sha256Hex(Files.readAllBytes(parentFormPath));
         for (String key : ownerKeys(ownerKey))
         {
-            for (Path dir : markerDirs(extensionProject))
-            {
-                Path marker = markerFileIn(dir, extensionProject.getName(), key, formName);
-                if (!Files.isRegularFile(marker))
-                    continue;
-                String actual = Files.readString(marker, StandardCharsets.US_ASCII).trim();
-                if (expected.equalsIgnoreCase(actual))
-                    return true;
-            }
+            Path marker = markerFileIn(dir, extensionProject.getName(), key, formName);
+            if (!Files.isRegularFile(marker))
+                continue;
+            String actual = Files.readString(marker, StandardCharsets.US_ASCII).trim();
+            if (expected.equalsIgnoreCase(actual))
+                return true;
         }
         return false;
     }
@@ -91,29 +89,6 @@ final class FormUpdateSyncMarker
         String text = new String(formXmlBytes, StandardCharsets.UTF_8);
         text = text.replace("\r\n", "\n").replace('\r', '\n'); //$NON-NLS-1$ //$NON-NLS-2$
         return ID_ELEMENT.matcher(text).replaceAll("<id>*</id>"); //$NON-NLS-1$
-    }
-
-    /** Project-local first, then workspace plugin state (legacy). */
-    static List<Path> markerDirs(IProject extensionProject)
-    {
-        List<Path> dirs = new ArrayList<>(2);
-        Path projectLocal = projectLocalDir(extensionProject);
-        if (projectLocal != null)
-            dirs.add(projectLocal);
-        Path state = workspaceStateDir();
-        if (state != null)
-            dirs.add(state);
-        return dirs;
-    }
-
-    static Path projectLocalDir(IProject extensionProject)
-    {
-        if (extensionProject == null || extensionProject.getLocation() == null)
-            return null;
-        return extensionProject.getLocation().toFile().toPath()
-            .resolve(".settings") //$NON-NLS-1$
-            .resolve(PLUGIN_ID)
-            .resolve("parent-sync"); //$NON-NLS-1$
     }
 
     private static Path workspaceStateDir()

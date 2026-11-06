@@ -31,7 +31,7 @@ Upstream давно без релизов; на EDT 2026.2 стоковый пл
 | После Update Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: копирует id атрибутов/команд Form → BaseForm |
 | После Update: Adopted ТЧ + Own-реквизит уже из родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell по uuid родителя |
 | После Update: ссылки на команды/роли/ФО, которых нет в CFE → ibcmd/Jenkins | `ExtensionMissingRefCleaner`: вырезает незаимствованные refs из Form/BaseForm |
-| Список снова полный после смены `-data` / ручной чистки BaseForm | Маркеры в `.settings/…/parent-sync` + кнопка **Accept (no Update)** |
+| Список снова полный после смены `-data` / ручной чистки BaseForm | Маркеры только в workspace `.metadata/…/parent-sync` + **Accept (no Update)** (никогда в дерево CFE) |
 
 Проверено: EDT **2026.2**, пакетный Update (~129 форм), `Updated: N. Failed: 0`.
 

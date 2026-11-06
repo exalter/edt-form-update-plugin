@@ -663,7 +663,7 @@ public class UpdateFormHandler
     {
         try
         {
-            // Fast path before expensive EMF adopt: project-local / legacy sync marker.
+            // Fast path before expensive EMF adopt: workspace sync marker.
             Path parentPath = resolveParentFormPath(extensionProject, ownerName, formName);
             if (parentPath != null)
             {
