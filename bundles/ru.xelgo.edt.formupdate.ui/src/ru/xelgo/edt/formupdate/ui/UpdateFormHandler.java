@@ -146,12 +146,36 @@ public class UpdateFormHandler
         Shell shell = HandlerUtil.getActiveShell(event);
         ConcurrentHashMap<String, FormWorkspaceGuard> activeGuards = new ConcurrentHashMap<>();
         AtomicReference<ExtensionMissingRefCleaner> missingRefCleaner = new AtomicReference<>();
+        AtomicReference<ExtensionAdoptSideEffectCleaner> sideEffectCleaner = new AtomicReference<>();
         BatchUpdateFormsDialog dialog = new BatchUpdateFormsDialog(shell, candidates, new BatchUpdateFormsDialog.UpdateOperation()
         {
             @Override
             public boolean prepare()
             {
-                return prepareBatchUpdate(event);
+                if (!prepareBatchUpdate(event))
+                    return false;
+                try
+                {
+                    sideEffectCleaner.set(ExtensionAdoptSideEffectCleaner.capture(extensionProject.getProject()));
+                    logInfo("Captured extension src snapshot for adopt side-effect cleanup"); //$NON-NLS-1$
+                }
+                catch (Exception e)
+                {
+                    logWarning("Could not capture src snapshot for side-effect cleanup: {0}", e.toString()); //$NON-NLS-1$
+                    sideEffectCleaner.set(null);
+                }
+                return true;
+            }
+
+            @Override
+            public String cleanupAdoptSideEffects()
+            {
+                ExtensionAdoptSideEffectCleaner cleaner = sideEffectCleaner.getAndSet(null);
+                if (cleaner == null)
+                    return "side-effect cleanup skipped (no snapshot)"; //$NON-NLS-1$
+                String msg = cleaner.restore();
+                logInfo("{0}", msg); //$NON-NLS-1$
+                return msg;
             }
 
             @Override

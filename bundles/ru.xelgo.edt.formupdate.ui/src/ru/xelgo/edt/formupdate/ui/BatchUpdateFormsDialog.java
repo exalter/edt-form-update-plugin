@@ -60,6 +60,15 @@ final class BatchUpdateFormsDialog
         {
             // optional
         }
+
+        /**
+         * After the batch: drop adopt side-effect stubs / restore Configuration.mdo.
+         * @return short log line
+         */
+        default String cleanupAdoptSideEffects()
+        {
+            return ""; //$NON-NLS-1$
+        }
     }
 
     private static final int ACCEPT_ID = 42;
@@ -422,6 +431,9 @@ final class BatchUpdateFormsDialog
             }
             incrementProgress();
         }
+        String cleanupMsg = updateOperation.cleanupAdoptSideEffects();
+        if (cleanupMsg != null && !cleanupMsg.isBlank())
+            appendLog(cleanupMsg);
         finishUpdate(updated, failed);
     }
 

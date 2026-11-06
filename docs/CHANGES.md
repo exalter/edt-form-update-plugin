@@ -1,3 +1,10 @@
+## 1.0.2.v20261107c — auto-clean adopt stubs after batch Update
+
+- Before batch: snapshot `src/**` file set + `Configuration.mdo`.
+- After batch: delete **new** files under `src/` (updateAdopted stubs), restore
+  `Configuration.mdo`, refresh project. Keeps modified Form/BaseForm that
+  already existed. Log line: `side-effect cleanup: deletedNewFiles=…`.
+
 ## 1.0.2.v20261107b — markers workspace-only (never CFE tree)
 
 - Revert project-local `.settings/ru.xelgo…/parent-sync/` write/read. Product
