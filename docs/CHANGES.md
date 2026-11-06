@@ -1,3 +1,12 @@
+## 1.0.2.v20261107d — crash-pattern HARD fail + preserve EOL + BaseForm partial
+
+- After id-align (and again after missing-ref strip): remaining **crash-pattern**
+  → row **Failed** (no soft Success that segfaults `ibcmd`).
+- Form/BaseForm / missing-ref writes keep the file's previous LF/CRLF
+  (`FormXmlIo`); BaseForm sync from parent keeps extension EOL.
+- Message `Updated (BaseForm partial)` when BaseForm still ≠ parent after
+  ignoring `<id>` and stripped commandName/role/FO.
+
 ## 1.0.2.v20261107c — auto-clean adopt stubs after batch Update
 
 - Before batch: snapshot `src/**` file set + `Configuration.mdo`.

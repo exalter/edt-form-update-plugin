@@ -123,32 +123,12 @@ final class ExtensionMissingRefCleaner
             throw new IOException("Missing-ref clean refused empty form: " + formXmlPath); //$NON-NLS-1$
 
         byte[] backup = Files.readAllBytes(formXmlPath);
-        Path tmp = formXmlPath.resolveSibling(formXmlPath.getFileName().toString() + ".refclean.tmp"); //$NON-NLS-1$
         try
         {
-            Files.writeString(tmp, rewrite.text);
-            if (Files.size(tmp) == 0L)
-                throw new IOException("Missing-ref clean temp empty: " + tmp); //$NON-NLS-1$
-            try
-            {
-                Files.move(tmp, formXmlPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-            }
-            catch (java.nio.file.AtomicMoveNotSupportedException atomicUnsupported)
-            {
-                Files.move(tmp, formXmlPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
+            FormXmlIo.writeTextPreservingEol(formXmlPath, rewrite.text);
         }
         catch (IOException e)
         {
-            try
-            {
-                Files.deleteIfExists(tmp);
-            }
-            catch (IOException ignored)
-            {
-                // best-effort
-            }
             if (Files.exists(formXmlPath) && Files.size(formXmlPath) == 0L && backup.length > 0)
                 Files.write(formXmlPath, backup);
             throw e;

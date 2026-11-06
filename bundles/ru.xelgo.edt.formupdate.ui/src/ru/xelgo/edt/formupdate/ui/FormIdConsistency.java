@@ -96,32 +96,12 @@ final class FormIdConsistency
             if (cmds.text == null || cmds.text.isEmpty())
                 throw new IOException("XML id-align refused empty BaseForm content: " + baseFormPath); //$NON-NLS-1$
             byte[] backup = Files.readAllBytes(baseFormPath);
-            Path tmp = baseFormPath.resolveSibling(baseFormPath.getFileName().toString() + ".align.tmp"); //$NON-NLS-1$
             try
             {
-                Files.writeString(tmp, cmds.text);
-                if (Files.size(tmp) == 0L)
-                    throw new IOException("XML id-align temp write empty: " + tmp); //$NON-NLS-1$
-                try
-                {
-                    Files.move(tmp, baseFormPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
-                }
-                catch (java.nio.file.AtomicMoveNotSupportedException atomicUnsupported)
-                {
-                    Files.move(tmp, baseFormPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                }
+                FormXmlIo.writeTextPreservingEol(baseFormPath, cmds.text);
             }
             catch (IOException e)
             {
-                try
-                {
-                    Files.deleteIfExists(tmp);
-                }
-                catch (IOException ignored)
-                {
-                    // best-effort
-                }
                 if (Files.exists(baseFormPath) && Files.size(baseFormPath) == 0L && backup.length > 0)
                     Files.write(baseFormPath, backup);
                 throw e;
@@ -144,6 +124,7 @@ final class FormIdConsistency
 
     private static Map<String, Long> collectXmlNameIds(String xml, String tag)
     {
+        // Same algorithm as align_form_baseform_ids.py (name_id_map).
         Map<String, Long> result = new HashMap<>();
         java.util.regex.Pattern block = java.util.regex.Pattern.compile(
             "<" + tag + ">(.*?)</" + tag + ">", java.util.regex.Pattern.DOTALL); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
@@ -151,16 +132,23 @@ final class FormIdConsistency
         while (m.find())
         {
             String body = m.group(1);
-            java.util.regex.Matcher name = java.util.regex.Pattern.compile("<name>([^<]+)</name>").matcher(body); //$NON-NLS-1$
-            java.util.regex.Matcher id = java.util.regex.Pattern.compile("<id>(\\d+)</id>").matcher(body); //$NON-NLS-1$
-            if (name.find() && id.find())
-                result.put(name.group(1), Long.valueOf(id.group(1)));
+            String name = firstXmlGroup(body, "<name>([^<]+)</name>"); //$NON-NLS-1$
+            String id = firstXmlGroup(body, "<id>(\\d+)</id>"); //$NON-NLS-1$
+            if (name != null && id != null)
+                result.put(name, Long.valueOf(id));
         }
         return result;
     }
 
+    private static String firstXmlGroup(String body, String pattern)
+    {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(pattern).matcher(body);
+        return m.find() ? m.group(1) : null;
+    }
+
     private static ApplyXmlResult applyXmlIds(String xml, String tag, Map<String, Long> wanted)
     {
+        // Same algorithm as align_form_baseform_ids.py (apply_map / replace_id count=1).
         java.util.regex.Pattern block = java.util.regex.Pattern.compile(
             "(<" + tag + ">)(.*?)(</" + tag + ">)", java.util.regex.Pattern.DOTALL); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         java.util.regex.Matcher m = block.matcher(xml);
@@ -169,14 +157,14 @@ final class FormIdConsistency
         while (m.find())
         {
             String body = m.group(2);
-            java.util.regex.Matcher name = java.util.regex.Pattern.compile("<name>([^<]+)</name>").matcher(body); //$NON-NLS-1$
-            if (name.find() && wanted.containsKey(name.group(1)))
+            String name = firstXmlGroup(body, "<name>([^<]+)</name>"); //$NON-NLS-1$
+            if (name != null && wanted.containsKey(name))
             {
-                Long want = wanted.get(name.group(1));
-                java.util.regex.Matcher id = java.util.regex.Pattern.compile("<id>(\\d+)</id>").matcher(body); //$NON-NLS-1$
-                if (id.find() && want != null && !want.toString().equals(id.group(1)))
+                Long want = wanted.get(name);
+                String id = firstXmlGroup(body, "<id>(\\d+)</id>"); //$NON-NLS-1$
+                if (want != null && id != null && !want.toString().equals(id))
                 {
-                    body = id.replaceFirst("<id>" + want + "</id>"); //$NON-NLS-1$ //$NON-NLS-2$
+                    body = body.replaceFirst("<id>\\d+</id>", "<id>" + want + "</id>"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                     changed++;
                 }
             }

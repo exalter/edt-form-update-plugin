@@ -5,7 +5,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -246,6 +245,10 @@ public class UpdateFormHandler
                     // Drop refs to commands/roles/FO not present in the extension (MR-1935 class).
                     int stripped = stripMissingExtensionRefs(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), missingRefCleaner, monitor);
+                    // Strip can leave Form/BaseForm id pairs stale on disk — align again, then HARD fail
+                    // if crash-pattern remains (ibcmd segfault). Soft warn was shipping broken rows.
+                    alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
                     // updateAdopted may borrow Adopted ТЧ but leave attributes Own → duplicate parent.
                     convertOwnAttributesPresentInParent(extensionProject, candidate.getOwnerName(), monitor);
                     if (formResource != null)
@@ -257,12 +260,16 @@ public class UpdateFormHandler
                         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                     }
                     guard.assertNonEmpty(fileFallback ? "cyclic-file-fallback" : "id-align"); //$NON-NLS-1$ //$NON-NLS-2$
+                    boolean baseNearParent = isBaseFormNearParentAfterSanitize(extensionProject,
+                        candidate.getOwnerName(), candidate.getFormName());
                     writeParentSyncMarker(extensionProject, candidate.getOwnerName(), candidate.getFormName());
                     if (fileFallback)
                         candidate.setMessage(synced ? "Updated (BaseForm file fallback)" //$NON-NLS-1$
                             : "Updated (adopt Cyclic; no parent Form.form)"); //$NON-NLS-1$
                     else if (!synced)
                         candidate.setMessage("Updated (no parent Form.form sync)"); //$NON-NLS-1$
+                    else if (!baseNearParent)
+                        candidate.setMessage("Updated (BaseForm partial)"); //$NON-NLS-1$
                     else
                         candidate.setMessage(
                             valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
@@ -849,15 +856,58 @@ public class UpdateFormHandler
             logInfo("Form/BaseForm id align. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
                 result.summary());
 
-        if (result.stillMismatched() || result.isCrashPatternAfter())
+        if (result.isCrashPatternAfter())
         {
-            // Soft: hygiene script closes remaining crash-pattern; do not fail the row
-            // after BaseForm was already synced (re-list fix + marker still apply).
-            logWarning(
-                "Form/BaseForm id crash-pattern remains after align. Owner: {0}, form: {1}. " //$NON-NLS-1$
-                    + "Run post_form_update_hygiene.py.", //$NON-NLS-1$
-                ownerName, formName);
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                "Form/BaseForm id crash-pattern remains after align (ibcmd segfault risk). Owner: {0}, form: {1}. {2}", //$NON-NLS-1$
+                ownerName, formName, result.summary())));
         }
+        if (result.stillMismatched())
+        {
+            logWarning(
+                "Form/BaseForm id mismatches remain (not crash-pattern). Owner: {0}, form: {1}. {2}", //$NON-NLS-1$
+                ownerName, formName, result.summary());
+        }
+    }
+
+    /**
+     * After id-align + missing-ref strip, BaseForm should match parent once {@code <id>} and
+     * unadopted commandName/role/FO are ignored. Large gaps → {@code Updated (BaseForm partial)}.
+     */
+    private boolean isBaseFormNearParentAfterSanitize(IExtensionProject extensionProject, String ownerName,
+        String formName)
+    {
+        try
+        {
+            Path parentPath = resolveParentFormPath(extensionProject, ownerName, formName);
+            IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                true);
+            if (parentPath == null || baseFormResource == null || baseFormResource.getLocation() == null)
+                return false;
+            Path basePath = baseFormResource.getLocation().toFile().toPath();
+            if (!Files.isRegularFile(basePath))
+                return false;
+            byte[] baseBytes = Files.readAllBytes(basePath);
+            byte[] parentBytes = Files.readAllBytes(parentPath);
+            return FormUpdateSyncMarker.equalIgnoringIds(sanitizeRefsForCompare(baseBytes),
+                sanitizeRefsForCompare(parentBytes));
+        }
+        catch (Exception e)
+        {
+            logWarning("BaseForm near-parent check failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                e.toString());
+            return false;
+        }
+    }
+
+    /** Drop commandName / role / functionalOptions blocks so strip-after-Update is not a false partial. */
+    private static byte[] sanitizeRefsForCompare(byte[] formXml)
+    {
+        String text = new String(formXml, java.nio.charset.StandardCharsets.UTF_8);
+        text = text.replaceAll("(?s)<commandName>.*?</commandName>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        text = text.replaceAll("(?s)<role>.*?</role>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        text = text.replaceAll("(?s)<functionalOptions>.*?</functionalOptions>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private FormIdConsistency.Result alignOnceViaPlatformUri(IResource formResource, IResource baseFormResource)
@@ -1141,7 +1191,8 @@ public class UpdateFormHandler
                 return false;
             }
             Files.createDirectories(basePath.getParent());
-            Files.copy(parentPath, basePath, StandardCopyOption.REPLACE_EXISTING);
+            // Keep extension BaseForm EOL (often CRLF) even when parent CF is LF.
+            FormXmlIo.copyPreservingTargetEol(parentPath, basePath);
         }
         catch (IOException e)
         {
