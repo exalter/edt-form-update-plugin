@@ -245,6 +245,10 @@ public class UpdateFormHandler
                     // Drop refs to commands/roles/FO not present in the extension (MR-1935 class).
                     int stripped = stripMissingExtensionRefs(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), missingRefCleaner, monitor);
+                    // Parent form-level excludedCommands copied by updateAdopted / BaseForm sync
+                    // break extension load (Generate / WriteAndClose / Delete / Post).
+                    int strippedExcl = stripFormLevelExcludedCommands(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
                     // Strip can leave Form/BaseForm id pairs stale on disk — align again, then HARD fail
                     // if crash-pattern remains (ibcmd segfault). Soft warn was shipping broken rows.
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
@@ -275,6 +279,9 @@ public class UpdateFormHandler
                             valueOrDefault(Messages.BatchUpdateFormsDialog_StatusSuccess, "Updated")); //$NON-NLS-1$
                     if (stripped > 0)
                         candidate.setMessage(candidate.getMessage() + "; stripped missing refs=" + stripped); //$NON-NLS-1$
+                    if (strippedExcl > 0)
+                        candidate.setMessage(
+                            candidate.getMessage() + "; stripped form-level excludedCommands=" + strippedExcl); //$NON-NLS-1$
                     committed = true;
                     logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}, synced: {3}", //$NON-NLS-1$
                         candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback),
@@ -900,13 +907,17 @@ public class UpdateFormHandler
         }
     }
 
-    /** Drop commandName / role / functionalOptions blocks so strip-after-Update is not a false partial. */
+    /**
+     * Drop commandName / role / functionalOptions / form-level excludedCommands so
+     * strip-after-Update is not a false partial vs parent.
+     */
     private static byte[] sanitizeRefsForCompare(byte[] formXml)
     {
         String text = new String(formXml, java.nio.charset.StandardCharsets.UTF_8);
         text = text.replaceAll("(?s)<commandName>.*?</commandName>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
         text = text.replaceAll("(?s)<role>.*?</role>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
         text = text.replaceAll("(?s)<functionalOptions>.*?</functionalOptions>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        text = ExtensionFormLevelExcludedCommandsCleaner.rewrite(text).text;
         return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
@@ -995,6 +1006,52 @@ public class UpdateFormHandler
         }
         throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
             "CYCLIC_LAZY_LINKS: " + (last != null ? last.toString() : "unknown"), last)); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    /**
+     * After BaseForm sync: remove form-level {@code excludedCommands} that parent
+     * Update copied into Adopted Form/BaseForm. Soft on errors. Item-level lines
+     * (deeper indent) stay. Marker still keys off parent digest.
+     *
+     * @return number of XML elements removed across Form + BaseForm
+     */
+    private int stripFormLevelExcludedCommands(IExtensionProject extensionProject, String ownerName, String formName,
+        IProgressMonitor monitor)
+    {
+        try
+        {
+            int removed = 0;
+            IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                false);
+            IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                true);
+            if (formResource != null && formResource.getLocation() != null)
+            {
+                ExtensionFormLevelExcludedCommandsCleaner.Result r = ExtensionFormLevelExcludedCommandsCleaner
+                    .cleanFile(formResource.getLocation().toFile().toPath());
+                removed += r.removed;
+                if (r.removed > 0)
+                    formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+            }
+            if (baseFormResource != null && baseFormResource.getLocation() != null)
+            {
+                ExtensionFormLevelExcludedCommandsCleaner.Result r = ExtensionFormLevelExcludedCommandsCleaner
+                    .cleanFile(baseFormResource.getLocation().toFile().toPath());
+                removed += r.removed;
+                if (r.removed > 0)
+                    baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+            }
+            if (removed > 0)
+                logInfo("Stripped form-level excludedCommands. Owner: {0}, form: {1}, removed: {2}", ownerName, //$NON-NLS-1$
+                    formName, Integer.valueOf(removed));
+            return removed;
+        }
+        catch (Exception e)
+        {
+            logWarning("Form-level excludedCommands clean failed (soft). Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                ownerName, formName, e.toString());
+            return 0;
+        }
     }
 
     /**

@@ -76,8 +76,9 @@ final class FormUpdateSyncMarker
     }
 
     /**
-     * Compare Form XML ignoring {@code <id>N</id>} and CR (post id-align BaseForm
-     * must not look "stale" vs parent solely because of extension-range ids).
+     * Compare Form XML ignoring {@code <id>N</id>}, CR, and form-level
+     * {@code excludedCommands} (post Update we strip those from Adopted BaseForm;
+     * parent still has them — must not look "stale" forever).
      */
     static boolean equalIgnoringIds(byte[] baseFormBytes, byte[] parentFormBytes)
     {
@@ -88,6 +89,7 @@ final class FormUpdateSyncMarker
     {
         String text = new String(formXmlBytes, StandardCharsets.UTF_8);
         text = text.replace("\r\n", "\n").replace('\r', '\n'); //$NON-NLS-1$ //$NON-NLS-2$
+        text = ExtensionFormLevelExcludedCommandsCleaner.rewrite(text).text;
         return ID_ELEMENT.matcher(text).replaceAll("<id>*</id>"); //$NON-NLS-1$
     }
 
