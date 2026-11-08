@@ -5,12 +5,17 @@
 - Legacy single-line (parent-only) markers are not trusted alone — Update or
   Accept once with this jar to rewrite.
 
-## 1.0.2.v20261108 — BaseForm-first Update (no updateAdopted)
+## 1.0.2.v20261108 - BaseForm-first Update (no updateAdopted)
+
+Contract (RU): Update синхронизирует **BaseForm** с parent и чистит гигиену
+load (id, excludedCommands, refs, commandName). Слой **Form** adopt’ом не
+пересобирает и **не** ужимает уже толстый Form до handlers-only - только
+перестаёт раздувать. Ужим Form - вне плагина (отдельный скрипт при нужде).
 
 - Batch **Update** no longer calls EDT `updateAdopted`. Primary path =
   copy parent `Form.form` → extension `BaseForm` (EOL preserved), then
   id-align + missing-ref / excludedCommands / commandName strips + marker.
-- Extension **Form** layer (handlers / intentional deltas) is not rebuilt —
+- Extension **Form** layer (handlers / intentional deltas) is not rebuilt -
   avoids Designer “whole form in extension” and mass-adopt stubs in `src/`.
 - Removed `ExtensionAdoptSideEffectCleaner` from the Update happy-path (no
   post-batch stub rollback as SoT). `ParentAttributeAdoptFix` kept for
