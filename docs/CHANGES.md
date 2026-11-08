@@ -1,3 +1,14 @@
+## 1.0.2.v20261109c — Mac shortcut normalize inside Update
+
+- After BaseForm←parent (early + final HARD): rewrite `<shortcut>` bodies
+  `Cmd+`/`Command+`/`Option+` → `Ctrl+`/`Alt+` (same as
+  `normalize_form_shortcuts.py`). Fail the row if Mac tokens remain.
+- Compare/sanitize and sync-marker normalize apply the same rewrite so parent
+  still-on-Mac vs BaseForm-on-Ctrl does not eternal-relist or false
+  «BaseForm partial».
+- Orphan Adopted / thin overlay stay outside the plugin (project-wide /
+  advisory).
+
 ## 1.0.2.v20261109b — excludedCommands strip: do not eat next-line indent
 
 - Cleaner / sync-marker regex no longer uses `\s*` before EOL. Greedy `\s*`

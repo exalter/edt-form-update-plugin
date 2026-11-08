@@ -192,6 +192,9 @@ public class UpdateFormHandler
                     // parent form-level excludedCommands in the resource set / disk.
                     int strippedExclEarly = stripFormLevelExcludedCommands(extensionProject,
                         candidate.getOwnerName(), candidate.getFormName(), monitor, false);
+                    // Mac EDT rewrites parent shortcuts to Cmd+/Option+ on copy — SoT is Ctrl+/Alt+.
+                    int normalizedShortcutsEarly = normalizeFormShortcuts(extensionProject,
+                        candidate.getOwnerName(), candidate.getFormName(), monitor, false);
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
                     // Drop refs to commands/roles/FO not present in the extension (MR-1935 class).
@@ -222,6 +225,10 @@ public class UpdateFormHandler
                     int strippedExcl = stripFormLevelExcludedCommands(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor, true);
                     strippedExcl += strippedExclEarly;
+                    // FINAL shortcuts: EMF/parent re-save can put Cmd+ back; HARD fail if remain.
+                    int normalizedShortcuts = normalizeFormShortcuts(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor, true);
+                    normalizedShortcuts += normalizedShortcutsEarly;
                     guard.assertNonEmpty("BaseForm-sync"); //$NON-NLS-1$
                     boolean baseNearParent = isBaseFormNearParentAfterSanitize(extensionProject,
                         candidate.getOwnerName(), candidate.getFormName());
@@ -241,6 +248,9 @@ public class UpdateFormHandler
                     if (strippedCmdNames > 0)
                         candidate.setMessage(
                             candidate.getMessage() + "; normalized commandName=" + strippedCmdNames); //$NON-NLS-1$
+                    if (normalizedShortcuts > 0)
+                        candidate.setMessage(
+                            candidate.getMessage() + "; normalized Mac shortcuts=" + normalizedShortcuts); //$NON-NLS-1$
                     committed = true;
                     logInfo("Updating candidate finished. Owner: {0}, form: {1}, synced: {2}", //$NON-NLS-1$
                         candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(synced));
@@ -887,8 +897,8 @@ public class UpdateFormHandler
     }
 
     /**
-     * Drop commandName / role / functionalOptions / form-level excludedCommands so
-     * strip-after-Update is not a false partial vs parent.
+     * Drop commandName / role / functionalOptions / form-level excludedCommands and
+     * normalize Mac shortcuts so strip-after-Update is not a false partial vs parent.
      */
     private static byte[] sanitizeRefsForCompare(byte[] formXml)
     {
@@ -897,7 +907,78 @@ public class UpdateFormHandler
         text = text.replaceAll("(?s)<role>.*?</role>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
         text = text.replaceAll("(?s)<functionalOptions>.*?</functionalOptions>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
         text = ExtensionFormLevelExcludedCommandsCleaner.rewrite(text).text;
+        text = ExtensionFormShortcutNormalizer.rewrite(text).text;
         return text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Rewrite {@code Cmd+}/{@code Option+} inside {@code <shortcut>} to
+     * {@code Ctrl+}/{@code Alt+} on Form + BaseForm (SoT for shared CFE).
+     * {@code hardFail=true}: throw if Mac tokens remain after write.
+     *
+     * @return number of shortcut bodies changed across Form + BaseForm
+     */
+    private int normalizeFormShortcuts(IExtensionProject extensionProject, String ownerName, String formName,
+        IProgressMonitor monitor, boolean hardFail) throws CoreException
+    {
+        try
+        {
+            int changed = 0;
+            IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                false);
+            IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                true);
+            if (formResource != null && formResource.getLocation() != null)
+            {
+                formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                ExtensionFormShortcutNormalizer.Result r = ExtensionFormShortcutNormalizer
+                    .cleanFile(formResource.getLocation().toFile().toPath());
+                changed += r.changed;
+                if (r.changed > 0)
+                    formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+            }
+            if (baseFormResource != null && baseFormResource.getLocation() != null)
+            {
+                baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                ExtensionFormShortcutNormalizer.Result r = ExtensionFormShortcutNormalizer
+                    .cleanFile(baseFormResource.getLocation().toFile().toPath());
+                changed += r.changed;
+                if (r.changed > 0)
+                    baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                if (hardFail)
+                {
+                    String onDisk = Files.readString(baseFormResource.getLocation().toFile().toPath());
+                    if (ExtensionFormShortcutNormalizer.hasMacShortcuts(onDisk))
+                        throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                            "Mac <shortcut> remain on BaseForm after normalize. Owner: {0}, form: {1}", //$NON-NLS-1$
+                            ownerName, formName)));
+                }
+            }
+            else if (hardFail)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                    "BaseForm path missing for shortcut normalize. Owner: {0}, form: {1}", //$NON-NLS-1$
+                    ownerName, formName)));
+            }
+            if (changed > 0)
+                logInfo("Normalized Mac shortcuts. Owner: {0}, form: {1}, changed: {2}, hardFail: {3}", //$NON-NLS-1$
+                    ownerName, formName, Integer.valueOf(changed), Boolean.valueOf(hardFail));
+            return changed;
+        }
+        catch (CoreException e)
+        {
+            throw e;
+        }
+        catch (Exception e)
+        {
+            String msg = MessageFormat.format(
+                "Mac shortcut normalize failed. Owner: {0}, form: {1}, error: {2}", ownerName, //$NON-NLS-1$
+                formName, e.toString());
+            if (hardFail)
+                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, msg, e));
+            logWarning(msg);
+            return 0;
+        }
     }
 
     private FormIdConsistency.Result alignOnceViaPlatformUri(IResource formResource, IResource baseFormResource)

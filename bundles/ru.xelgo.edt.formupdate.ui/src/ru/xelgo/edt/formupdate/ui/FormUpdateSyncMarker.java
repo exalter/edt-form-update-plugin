@@ -123,9 +123,9 @@ final class FormUpdateSyncMarker
     }
 
     /**
-     * Compare Form XML ignoring {@code <id>N</id>}, CR, and form-level
-     * {@code excludedCommands} (post Update we strip those from Adopted BaseForm;
-     * parent still has them — must not look "stale" forever).
+     * Compare Form XML ignoring {@code <id>N</id>}, CR, form-level
+     * {@code excludedCommands}, and Mac vs Windows shortcut spelling (post Update
+     * we normalize Cmd+/Option+ on Adopted BaseForm; parent may still have them).
      */
     static boolean equalIgnoringIds(byte[] baseFormBytes, byte[] parentFormBytes)
     {
@@ -137,6 +137,7 @@ final class FormUpdateSyncMarker
         String text = new String(formXmlBytes, StandardCharsets.UTF_8);
         text = text.replace("\r\n", "\n").replace('\r', '\n'); //$NON-NLS-1$ //$NON-NLS-2$
         text = FORM_LEVEL_EXCLUDED.matcher(text).replaceAll(""); //$NON-NLS-1$
+        text = ExtensionFormShortcutNormalizer.rewrite(text).text;
         return ID_ELEMENT.matcher(text).replaceAll("<id>*</id>"); //$NON-NLS-1$
     }
 

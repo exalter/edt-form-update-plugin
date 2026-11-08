@@ -48,7 +48,8 @@ Adopted-форма в расширении = слой **Form** (доработк
 (`thin_adopted_form_layer.py` в skill `edt-form-update`), не часть плагина.
 
 После пакетного Update агент на диске всё равно гоняет
-`post_form_update_hygiene.py` (Mac shortcuts, id, orphan, load-команды).
+`post_form_update_hygiene.py` (orphan Adopted, thin-report; id / excludedCommands /
+Mac shortcuts плагин уже делает сам с `v20261109c+`).
 
 ## Доработки форка
 
@@ -63,6 +64,7 @@ Adopted-форма в расширении = слой **Form** (доработк
 | Adopted ТЧ + Own-реквизит с родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell (хвосты старых jar) |
 | Ссылки на команды/роли/ФО не из CFE | `ExtensionMissingRefCleaner` |
 | form-level `excludedCommands` → «Неверное имя команды» | Cleaner после последнего align; HARD fail если остались (`v20261109a+`); regex без `\s*` до EOL (`v20261109b+`) |
+| Mac `<shortcut>Cmd+/Option+` в git CFE | `ExtensionFormShortcutNormalizer` early+final HARD (`v20261109c+`) |
 | `commandName` CommonCommand / StandardCommand / orphan `Form.Command` | `ExtensionFormCommandNameCleaner` → `0` |
 | Список снова полный после смены `-data` / ручной чистки | Маркеры в `.metadata/…/parent-sync` + **Accept (no Update)** |
 
