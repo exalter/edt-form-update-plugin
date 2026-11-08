@@ -188,15 +188,15 @@ public class UpdateFormHandler
                     // stubs into the extension project. Extension Form layer (handlers) stays.
                     boolean synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
+                    // Early strip right after copy so later EMF id-align does not keep
+                    // parent form-level excludedCommands in the resource set / disk.
+                    int strippedExclEarly = stripFormLevelExcludedCommands(extensionProject,
+                        candidate.getOwnerName(), candidate.getFormName(), monitor, false);
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
                     // Drop refs to commands/roles/FO not present in the extension (MR-1935 class).
                     int stripped = stripMissingExtensionRefs(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), missingRefCleaner, monitor);
-                    // Parent form-level excludedCommands on BaseForm sync break extension load
-                    // (Generate / WriteAndClose / Delete / Post).
-                    int strippedExcl = stripFormLevelExcludedCommands(extensionProject, candidate.getOwnerName(),
-                        candidate.getFormName(), monitor);
                     // Parent button commandName (CommonCommand / StandardCommand / orphan
                     // Form.Command) — zero in Form.form SoT so EDT export/update_database
                     // load without a post-export scrub.
@@ -216,6 +216,12 @@ public class UpdateFormHandler
                             baseFormResource.getParent().refreshLocal(IResource.DEPTH_ONE, monitor);
                         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                     }
+                    // FINAL strip: must run after last align/EMF save. Soft early strip was not
+                    // enough — EMF re-save reintroduced form-level excludedCommands (DEV-78501
+                    // class load break: Generate / WriteAndClose). HARD fail if any remain.
+                    int strippedExcl = stripFormLevelExcludedCommands(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor, true);
+                    strippedExcl += strippedExclEarly;
                     guard.assertNonEmpty("BaseForm-sync"); //$NON-NLS-1$
                     boolean baseNearParent = isBaseFormNearParentAfterSanitize(extensionProject,
                         candidate.getOwnerName(), candidate.getFormName());
@@ -976,14 +982,18 @@ public class UpdateFormHandler
     }
 
     /**
-     * After BaseForm sync: remove form-level {@code excludedCommands} that parent
-     * Update copied into Adopted Form/BaseForm. Soft on errors. Item-level lines
-     * (deeper indent) stay. Marker still keys off parent digest.
+     * Remove form-level {@code excludedCommands} that parent Update copied into
+     * Adopted Form/BaseForm. Item-level lines (deeper indent) stay.
+     * <p>
+     * {@code hardFail=false}: log and return 0 on error (early pass after copy).
+     * {@code hardFail=true}: throw {@link CoreException} — row Failed, snapshot
+     * restored. Silent {@code return 0} after a successful BaseForm sync left
+     * Cancel/Generate/… on disk and broke {@code compileexttocfe}.
      *
      * @return number of XML elements removed across Form + BaseForm
      */
     private int stripFormLevelExcludedCommands(IExtensionProject extensionProject, String ownerName, String formName,
-        IProgressMonitor monitor)
+        IProgressMonitor monitor, boolean hardFail) throws CoreException
     {
         try
         {
@@ -992,31 +1002,62 @@ public class UpdateFormHandler
                 false);
             IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
                 true);
-            if (formResource != null && formResource.getLocation() != null)
+            if (formResource == null || formResource.getLocation() == null)
+                logWarning("Form path missing for excludedCommands strip. Owner: {0}, form: {1}", ownerName, //$NON-NLS-1$
+                    formName);
+            else
             {
+                formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                 ExtensionFormLevelExcludedCommandsCleaner.Result r = ExtensionFormLevelExcludedCommandsCleaner
                     .cleanFile(formResource.getLocation().toFile().toPath());
                 removed += r.removed;
                 if (r.removed > 0)
                     formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
             }
-            if (baseFormResource != null && baseFormResource.getLocation() != null)
+            if (baseFormResource == null || baseFormResource.getLocation() == null)
             {
+                String msg = MessageFormat.format(
+                    "BaseForm path missing for excludedCommands strip. Owner: {0}, form: {1}", ownerName, //$NON-NLS-1$
+                    formName);
+                if (hardFail)
+                    throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, msg));
+                logWarning(msg);
+            }
+            else
+            {
+                baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                 ExtensionFormLevelExcludedCommandsCleaner.Result r = ExtensionFormLevelExcludedCommandsCleaner
                     .cleanFile(baseFormResource.getLocation().toFile().toPath());
                 removed += r.removed;
                 if (r.removed > 0)
                     baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                // HARD verify on BaseForm even when removed==0 (already clean or gap).
+                if (hardFail)
+                {
+                    String onDisk = Files.readString(baseFormResource.getLocation().toFile().toPath());
+                    if (ExtensionFormLevelExcludedCommandsCleaner.hasFormLevel(onDisk))
+                        throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                            "Form-level excludedCommands remain on BaseForm after strip (ibcmd load risk). Owner: {0}, form: {1}", //$NON-NLS-1$
+                            ownerName, formName)));
+                }
             }
             if (removed > 0)
-                logInfo("Stripped form-level excludedCommands. Owner: {0}, form: {1}, removed: {2}", ownerName, //$NON-NLS-1$
-                    formName, Integer.valueOf(removed));
+                logInfo("Stripped form-level excludedCommands. Owner: {0}, form: {1}, removed: {2}, hardFail: {3}", //$NON-NLS-1$
+                    ownerName, formName, Integer.valueOf(removed), Boolean.valueOf(hardFail));
             return removed;
+        }
+        catch (CoreException e)
+        {
+            throw e;
         }
         catch (Exception e)
         {
-            logWarning("Form-level excludedCommands clean failed (soft). Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
-                ownerName, formName, e.toString());
+            String msg = MessageFormat.format(
+                "Form-level excludedCommands clean failed. Owner: {0}, form: {1}, error: {2}", ownerName, //$NON-NLS-1$
+                formName, e.toString());
+            if (hardFail)
+                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, msg, e));
+            logWarning(msg);
             return 0;
         }
     }

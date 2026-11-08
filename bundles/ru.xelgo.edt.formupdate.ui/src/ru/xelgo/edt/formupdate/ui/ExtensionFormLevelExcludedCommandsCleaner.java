@@ -13,9 +13,10 @@ import java.util.regex.Pattern;
  * those become {@code CommandSet/ExcludedCommand} and fail ibcmd with
  * «Неверное имя команды … Generate / WriteAndClose / Delete / Post».
  * <p>
- * Strip <strong>form-level</strong> lines only: zero indent or exactly two
- * spaces (EDT dumps both). Deeper indent = item/table context menus — leave
- * alone. Same rule as skill {@code strip_form_level_excluded_commands.py}.
+ * Strip <strong>form-level</strong> lines only: 0–2 spaces/tabs at line start
+ * (EDT dumps both; EMF re-save often uses zero indent). Deeper indent =
+ * item/table context menus — leave alone. Same rule as skill
+ * {@code strip_form_level_excluded_commands.py}.
  * <p>
  * Parent sync markers still key off the raw parent digest; compare paths
  * ignore these lines via {@link FormUpdateSyncMarker#normalize(byte[])}.
@@ -24,14 +25,22 @@ final class ExtensionFormLevelExcludedCommandsCleaner
 {
     /**
      * Form-level only. Item-level excludedCommands have deeper indent and must
-     * not match.
+     * not match. Allow CR/LF via {@code \R}; tabs (EMF) and 0–2 spaces (EDT dump).
      */
     private static final Pattern FORM_LEVEL = Pattern.compile(
-        "^(?:  )?<excludedCommands>[^<]+</excludedCommands>\\s*\\n?", //$NON-NLS-1$
+        "^[ \\t]{0,2}<excludedCommands>[^<]+</excludedCommands>\\s*\\R?", //$NON-NLS-1$
         Pattern.MULTILINE);
 
     private ExtensionFormLevelExcludedCommandsCleaner()
     {
+    }
+
+    /** {@code true} when at least one form-level excludedCommands line remains. */
+    static boolean hasFormLevel(String xml)
+    {
+        if (xml == null || xml.isEmpty())
+            return false;
+        return FORM_LEVEL.matcher(xml).find();
     }
 
     static Result cleanFile(Path formXmlPath) throws IOException
@@ -40,10 +49,19 @@ final class ExtensionFormLevelExcludedCommandsCleaner
             return Result.empty();
         String original = Files.readString(formXmlPath);
         Rewrite rewrite = rewrite(original);
-        if (rewrite.removed == 0 || rewrite.text.equals(original))
+        if (rewrite.removed == 0)
+        {
+            if (hasFormLevel(original))
+                throw new IOException(
+                    "Form-level excludedCommands still present but cleaner matched 0 lines: " //$NON-NLS-1$
+                        + formXmlPath);
             return new Result(0);
+        }
         if (rewrite.text == null || rewrite.text.isEmpty())
             throw new IOException("Form-level excludedCommands clean refused empty form: " + formXmlPath); //$NON-NLS-1$
+        if (hasFormLevel(rewrite.text))
+            throw new IOException(
+                "Form-level excludedCommands remain after clean (pattern gap): " + formXmlPath); //$NON-NLS-1$
 
         byte[] backup = Files.readAllBytes(formXmlPath);
         try
@@ -61,6 +79,11 @@ final class ExtensionFormLevelExcludedCommandsCleaner
             Files.write(formXmlPath, backup);
             throw new IOException("Form-level excludedCommands clean produced empty form: " + formXmlPath); //$NON-NLS-1$
         }
+        // Re-read: catch silent no-op writes / race with EMF save.
+        String onDisk = Files.readString(formXmlPath);
+        if (hasFormLevel(onDisk))
+            throw new IOException(
+                "Form-level excludedCommands still on disk after clean write: " + formXmlPath); //$NON-NLS-1$
         return new Result(rewrite.removed);
     }
 

@@ -40,6 +40,10 @@ final class FormUpdateSyncMarker
 {
     static final String PLUGIN_ID = "ru.xelgo.edt.formupdate.ui"; //$NON-NLS-1$
     private static final Pattern ID_ELEMENT = Pattern.compile("<id>\\s*\\d+\\s*</id>"); //$NON-NLS-1$
+    /** Same form-level rule as {@link ExtensionFormLevelExcludedCommandsCleaner}. */
+    private static final Pattern FORM_LEVEL_EXCLUDED = Pattern.compile(
+        "^[ \\t]{0,2}<excludedCommands>[^<]+</excludedCommands>\\s*\\R?", //$NON-NLS-1$
+        Pattern.MULTILINE);
     private static final String PREFIX_PARENT = "parent="; //$NON-NLS-1$
     private static final String PREFIX_BASE = "base="; //$NON-NLS-1$
 
@@ -132,7 +136,7 @@ final class FormUpdateSyncMarker
     {
         String text = new String(formXmlBytes, StandardCharsets.UTF_8);
         text = text.replace("\r\n", "\n").replace('\r', '\n'); //$NON-NLS-1$ //$NON-NLS-2$
-        text = ExtensionFormLevelExcludedCommandsCleaner.rewrite(text).text;
+        text = FORM_LEVEL_EXCLUDED.matcher(text).replaceAll(""); //$NON-NLS-1$
         return ID_ELEMENT.matcher(text).replaceAll("<id>*</id>"); //$NON-NLS-1$
     }
 

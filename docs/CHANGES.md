@@ -1,3 +1,14 @@
+## 1.0.2.v20261109a — excludedCommands strip HARD after last align
+
+- Form-level `excludedCommands` strip no longer soft-`return 0` on the final
+  pass: row **Failed** + snapshot restore if clean throws or BaseForm still
+  has form-level lines after write (ibcmd «Неверное имя команды»).
+- Order: early strip right after BaseForm←parent, then refs/commandName/
+  id-align, then **final strip** (EMF re-save was reintroducing Cancel/
+  Generate/… when strip ran only before the second align).
+- Cleaner regex: 0–2 spaces/tabs + `\R`; verify on disk after write.
+- Message still appends `stripped form-level excludedCommands=N`.
+
 ## 1.0.2.v20261109 — scan: disk BaseForm↔parent is authoritative
 
 - Detect/list no longer gates workspace file compare on EMF
