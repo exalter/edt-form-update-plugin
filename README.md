@@ -62,7 +62,7 @@ Adopted-форма в расширении = слой **Form** (доработк
 | Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: id Form → BaseForm |
 | Adopted ТЧ + Own-реквизит с родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell (хвосты старых jar) |
 | Ссылки на команды/роли/ФО не из CFE | `ExtensionMissingRefCleaner` |
-| form-level `excludedCommands` → «Неверное имя команды» | `ExtensionFormLevelExcludedCommandsCleaner` после последнего align; HARD fail если остались (`v20261109a+`) |
+| form-level `excludedCommands` → «Неверное имя команды» | Cleaner после последнего align; HARD fail если остались (`v20261109a+`); regex без `\s*` до EOL (`v20261109b+`) |
 | `commandName` CommonCommand / StandardCommand / orphan `Form.Command` | `ExtensionFormCommandNameCleaner` → `0` |
 | Список снова полный после смены `-data` / ручной чистки | Маркеры в `.metadata/…/parent-sync` + **Accept (no Update)** |
 

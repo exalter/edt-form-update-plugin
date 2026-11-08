@@ -42,7 +42,7 @@ final class FormUpdateSyncMarker
     private static final Pattern ID_ELEMENT = Pattern.compile("<id>\\s*\\d+\\s*</id>"); //$NON-NLS-1$
     /** Same form-level rule as {@link ExtensionFormLevelExcludedCommandsCleaner}. */
     private static final Pattern FORM_LEVEL_EXCLUDED = Pattern.compile(
-        "^[ \\t]{0,2}<excludedCommands>[^<]+</excludedCommands>\\s*\\R?", //$NON-NLS-1$
+        "^[ \\t]{0,2}<excludedCommands>[^<]+</excludedCommands>[ \\t]*(?:\\r\\n|\\n|\\r)?", //$NON-NLS-1$
         Pattern.MULTILINE);
     private static final String PREFIX_PARENT = "parent="; //$NON-NLS-1$
     private static final String PREFIX_BASE = "base="; //$NON-NLS-1$

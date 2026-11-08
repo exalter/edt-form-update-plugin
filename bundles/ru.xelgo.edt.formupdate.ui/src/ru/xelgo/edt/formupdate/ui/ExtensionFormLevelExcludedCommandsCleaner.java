@@ -25,10 +25,13 @@ final class ExtensionFormLevelExcludedCommandsCleaner
 {
     /**
      * Form-level only. Item-level excludedCommands have deeper indent and must
-     * not match. Allow CR/LF via {@code \R}; tabs (EMF) and 0–2 spaces (EDT dump).
+     * not match. Trailing spaces/tabs on the same line, then at most one EOL.
+     * Do <strong>not</strong> use {@code \s*} before EOL: it eats the next
+     * line's indent, so the next {@code <excludedCommands>} is no longer at
+     * {@code ^} and survives the pass → «pattern gap» / half-stripped Cancel.
      */
     private static final Pattern FORM_LEVEL = Pattern.compile(
-        "^[ \\t]{0,2}<excludedCommands>[^<]+</excludedCommands>\\s*\\R?", //$NON-NLS-1$
+        "^[ \\t]{0,2}<excludedCommands>[^<]+</excludedCommands>[ \\t]*(?:\\r\\n|\\n|\\r)?", //$NON-NLS-1$
         Pattern.MULTILINE);
 
     private ExtensionFormLevelExcludedCommandsCleaner()

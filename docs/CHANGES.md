@@ -1,3 +1,12 @@
+## 1.0.2.v20261109b — excludedCommands strip: do not eat next-line indent
+
+- Cleaner / sync-marker regex no longer uses `\s*` before EOL. Greedy `\s*`
+  ate the next form-level line's leading spaces, so that line was no longer
+  at `^` in the same Matcher pass and survived → «pattern gap», Updated:0 /
+  Failed:N on reports (Cancel/Generate/… half-stripped).
+- New: 0–2 spaces/tabs + tag + same-line spaces + one optional `\r\n`/`\n`/`\r`.
+- Item-level (deeper indent) still untouched.
+
 ## 1.0.2.v20261109a — excludedCommands strip HARD after last align
 
 - Form-level `excludedCommands` strip no longer soft-`return 0` on the final
@@ -6,7 +15,7 @@
 - Order: early strip right after BaseForm←parent, then refs/commandName/
   id-align, then **final strip** (EMF re-save was reintroducing Cancel/
   Generate/… when strip ran only before the second align).
-- Cleaner regex: 0–2 spaces/tabs + `\R`; verify on disk after write.
+- Cleaner regex: 0–2 spaces/tabs + line EOL (see v20261109b); verify on disk.
 - Message still appends `stripped form-level excludedCommands=N`.
 
 ## 1.0.2.v20261109 — scan: disk BaseForm↔parent is authoritative
