@@ -145,36 +145,13 @@ public class UpdateFormHandler
         Shell shell = HandlerUtil.getActiveShell(event);
         ConcurrentHashMap<String, FormWorkspaceGuard> activeGuards = new ConcurrentHashMap<>();
         AtomicReference<ExtensionMissingRefCleaner> missingRefCleaner = new AtomicReference<>();
-        AtomicReference<ExtensionAdoptSideEffectCleaner> sideEffectCleaner = new AtomicReference<>();
         BatchUpdateFormsDialog dialog = new BatchUpdateFormsDialog(shell, candidates, new BatchUpdateFormsDialog.UpdateOperation()
         {
             @Override
             public boolean prepare()
             {
-                if (!prepareBatchUpdate(event))
-                    return false;
-                try
-                {
-                    sideEffectCleaner.set(ExtensionAdoptSideEffectCleaner.capture(extensionProject.getProject()));
-                    logInfo("Captured extension src snapshot for adopt side-effect cleanup"); //$NON-NLS-1$
-                }
-                catch (Exception e)
-                {
-                    logWarning("Could not capture src snapshot for side-effect cleanup: {0}", e.toString()); //$NON-NLS-1$
-                    sideEffectCleaner.set(null);
-                }
-                return true;
-            }
-
-            @Override
-            public String cleanupAdoptSideEffects()
-            {
-                ExtensionAdoptSideEffectCleaner cleaner = sideEffectCleaner.getAndSet(null);
-                if (cleaner == null)
-                    return "side-effect cleanup skipped (no snapshot)"; //$NON-NLS-1$
-                String msg = cleaner.restore();
-                logInfo("{0}", msg); //$NON-NLS-1$
-                return msg;
+                // BaseForm-first Update does not call updateAdopted — no src snapshot / stub rollback.
+                return prepareBatchUpdate(event);
             }
 
             @Override
@@ -192,8 +169,8 @@ public class UpdateFormHandler
             public void update(FormUpdateCandidate candidate, IProgressMonitor monitor) throws CoreException
             {
                 String key = guardKey(candidate);
-                logInfo("Updating candidate started. Owner: {0}, form: {1}", candidate.getOwnerName(), //$NON-NLS-1$
-                    candidate.getFormName());
+                logInfo("Updating candidate started (BaseForm file sync). Owner: {0}, form: {1}", //$NON-NLS-1$
+                    candidate.getOwnerName(), candidate.getFormName());
                 String ownerQualified = candidate.getOwnerName();
                 IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerQualified,
                     candidate.getFormName(), false);
@@ -204,40 +181,11 @@ public class UpdateFormHandler
                 boolean committed = false;
                 try
                 {
-                    boolean fileFallback = false;
-                    try
-                    {
-                        updateAdoptedWithCyclicRetry(modelObjectAdopter, candidate, extensionProject, monitor,
-                            formResource, baseFormResource);
-                        if (monitor.isCanceled())
-                            throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
-                        if (formResource != null)
-                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        if (baseFormResource != null)
-                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        guard.assertNonEmpty("updateAdopted"); //$NON-NLS-1$
-                    }
-                    catch (CoreException adoptError)
-                    {
-                        if (!isCyclicLazyLinks(adoptError))
-                        {
-                            guard.restore();
-                            throw adoptError;
-                        }
-                        // Full EMF adopt cannot resolve PictureRef/ColorRef cycles on EDT 2026.2+.
-                        guard.restore();
-                        if (formResource != null)
-                            formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        if (baseFormResource != null)
-                            baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                        logWarning(
-                            "Cyclic on updateAdopted after retry — BaseForm file sync only. Owner: {0}, form: {1}", //$NON-NLS-1$
-                            candidate.getOwnerName(), candidate.getFormName());
-                        fileFallback = true;
-                    }
-                    // Always force BaseForm = parent Form.form on disk when parent exists,
-                    // then id-align (EMF, XML fallback on Cyclic). Missing parent is soft —
-                    // adopt may already have refreshed BaseForm; do not mark Failed.
+                    if (monitor.isCanceled())
+                        throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
+                    // Primary path: refresh BaseForm from parent Form.form only. Do NOT call
+                    // updateAdopted — it fattens Form (attrs/commands/items) and mass-adopts
+                    // stubs into the extension project. Extension Form layer (handlers) stays.
                     boolean synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
@@ -245,15 +193,20 @@ public class UpdateFormHandler
                     // Drop refs to commands/roles/FO not present in the extension (MR-1935 class).
                     int stripped = stripMissingExtensionRefs(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), missingRefCleaner, monitor);
-                    // Parent form-level excludedCommands copied by updateAdopted / BaseForm sync
-                    // break extension load (Generate / WriteAndClose / Delete / Post).
+                    // Parent form-level excludedCommands on BaseForm sync break extension load
+                    // (Generate / WriteAndClose / Delete / Post).
                     int strippedExcl = stripFormLevelExcludedCommands(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
+                    // Parent button commandName (CommonCommand / StandardCommand / orphan
+                    // Form.Command) — zero in Form.form SoT so EDT export/update_database
+                    // load without a post-export scrub.
+                    int strippedCmdNames = stripBadFormCommandNames(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
                     // Strip can leave Form/BaseForm id pairs stale on disk — align again, then HARD fail
-                    // if crash-pattern remains (ibcmd segfault). Soft warn was shipping broken rows.
+                    // if crash-pattern remains (ibcmd segfault).
                     alignFormBaseFormIdsAfterUpdate(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
-                    // updateAdopted may borrow Adopted ТЧ but leave attributes Own → duplicate parent.
+                    // Repair Own→Adopted shells left by older updateAdopted runs on object .mdo.
                     convertOwnAttributesPresentInParent(extensionProject, candidate.getOwnerName(), monitor);
                     if (formResource != null)
                         formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
@@ -263,14 +216,11 @@ public class UpdateFormHandler
                             baseFormResource.getParent().refreshLocal(IResource.DEPTH_ONE, monitor);
                         baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
                     }
-                    guard.assertNonEmpty(fileFallback ? "cyclic-file-fallback" : "id-align"); //$NON-NLS-1$ //$NON-NLS-2$
+                    guard.assertNonEmpty("BaseForm-sync"); //$NON-NLS-1$
                     boolean baseNearParent = isBaseFormNearParentAfterSanitize(extensionProject,
                         candidate.getOwnerName(), candidate.getFormName());
                     writeParentSyncMarker(extensionProject, candidate.getOwnerName(), candidate.getFormName());
-                    if (fileFallback)
-                        candidate.setMessage(synced ? "Updated (BaseForm file fallback)" //$NON-NLS-1$
-                            : "Updated (adopt Cyclic; no parent Form.form)"); //$NON-NLS-1$
-                    else if (!synced)
+                    if (!synced)
                         candidate.setMessage("Updated (no parent Form.form sync)"); //$NON-NLS-1$
                     else if (!baseNearParent)
                         candidate.setMessage("Updated (BaseForm partial)"); //$NON-NLS-1$
@@ -282,10 +232,12 @@ public class UpdateFormHandler
                     if (strippedExcl > 0)
                         candidate.setMessage(
                             candidate.getMessage() + "; stripped form-level excludedCommands=" + strippedExcl); //$NON-NLS-1$
+                    if (strippedCmdNames > 0)
+                        candidate.setMessage(
+                            candidate.getMessage() + "; normalized commandName=" + strippedCmdNames); //$NON-NLS-1$
                     committed = true;
-                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, fallback: {2}, synced: {3}", //$NON-NLS-1$
-                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(fileFallback),
-                        Boolean.valueOf(synced));
+                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, synced: {2}", //$NON-NLS-1$
+                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(synced));
                 }
                 catch (CoreException e)
                 {
@@ -294,7 +246,7 @@ public class UpdateFormHandler
                 }
                 catch (Throwable t)
                 {
-                    // AssertionError (cyclic PictureRef/ColorRef lazy links) is Error, not Exception —
+                    // AssertionError from EMF id-align paths is Error, not Exception —
                     // must restore before cleanup or Failed rows leave 0-byte BaseForm.
                     guard.restore();
                     if (t instanceof Error && !(t instanceof AssertionError))
@@ -957,55 +909,49 @@ public class UpdateFormHandler
     }
 
     /**
-     * EDT 2026.2+ often throws {@code AssertionError: Cyclic resolution of lazy links}
-     * inside {@code updateAdopted} for forms with PictureRef/ColorRef. Retry once after
-     * refresh; caller may then fall back to file sync of BaseForm.
+     * After BaseForm sync: set bad button {@code commandName} to {@code 0} in
+     * Form/BaseForm (CommonCommand / StandardCommand / orphan Form.Command). Soft
+     * on errors. Marker still keys off parent digest.
+     *
+     * @return number of commandName values changed across Form + BaseForm
      */
-    private void updateAdoptedWithCyclicRetry(IModelObjectAdopter modelObjectAdopter, FormUpdateCandidate candidate,
-        IExtensionProject extensionProject, IProgressMonitor monitor, IResource formResource,
-        IResource baseFormResource) throws CoreException
+    private int stripBadFormCommandNames(IExtensionProject extensionProject, String ownerName, String formName,
+        IProgressMonitor monitor)
     {
-        Throwable last = null;
-        for (int attempt = 1; attempt <= 2; attempt++)
+        try
         {
-            try
+            int changed = 0;
+            IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                false);
+            IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+                true);
+            if (formResource != null && formResource.getLocation() != null)
             {
-                modelObjectAdopter.updateAdopted(candidate.getSourceForm(), extensionProject, monitor);
-                return;
-            }
-            catch (Throwable t)
-            {
-                last = t;
-                if (!isCyclicLazyLinks(t))
-                {
-                    if (t instanceof CoreException)
-                        throw (CoreException)t;
-                    if (t instanceof Error && !(t instanceof AssertionError))
-                        throw (Error)t;
-                    throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, t.toString(), t));
-                }
-                logWarning(
-                    "Cyclic resolution on updateAdopted attempt {0}. Owner: {1}, form: {2}, error: {3}", //$NON-NLS-1$
-                    Integer.valueOf(attempt), candidate.getOwnerName(), candidate.getFormName(), t.toString());
-                if (attempt >= 2)
-                    break;
-                if (formResource != null)
+                ExtensionFormCommandNameCleaner.Result r = ExtensionFormCommandNameCleaner
+                    .cleanFile(formResource.getLocation().toFile().toPath());
+                changed += r.changed;
+                if (r.changed > 0)
                     formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                if (baseFormResource != null)
-                    baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
-                try
-                {
-                    Thread.sleep(250L);
-                }
-                catch (InterruptedException ie)
-                {
-                    Thread.currentThread().interrupt();
-                    throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update interrupted", ie)); //$NON-NLS-1$
-                }
             }
+            if (baseFormResource != null && baseFormResource.getLocation() != null)
+            {
+                ExtensionFormCommandNameCleaner.Result r = ExtensionFormCommandNameCleaner
+                    .cleanFile(baseFormResource.getLocation().toFile().toPath());
+                changed += r.changed;
+                if (r.changed > 0)
+                    baseFormResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+            }
+            if (changed > 0)
+                logInfo("Normalized bad form commandName. Owner: {0}, form: {1}, changed: {2}", ownerName, //$NON-NLS-1$
+                    formName, Integer.valueOf(changed));
+            return changed;
         }
-        throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID,
-            "CYCLIC_LAZY_LINKS: " + (last != null ? last.toString() : "unknown"), last)); //$NON-NLS-1$ //$NON-NLS-2$
+        catch (Exception e)
+        {
+            logWarning("Form commandName clean failed (soft). Owner: {0}, form: {1}, error: {2}", ownerName, //$NON-NLS-1$
+                formName, e.toString());
+            return 0;
+        }
     }
 
     /**
@@ -1203,9 +1149,9 @@ public class UpdateFormHandler
     }
 
     /**
-     * Copy parent configuration {@code Form.form} onto extension {@code BaseForm/Form.form}
-     * without EMF adopt. Keeps extension Form layer; refreshes vendor snapshot when Cyclic
-     * blocks {@code updateAdopted}.
+     * Primary Update step: copy parent configuration {@code Form.form} onto extension
+     * {@code BaseForm/Form.form} without EMF {@code updateAdopted}. Leaves the extension
+     * Form layer (handlers / intentional deltas) untouched.
      *
      * @return {@code true} when BaseForm was overwritten from parent; {@code false} when
      *         parent Form.form is missing (soft — do not fail the row).
@@ -1230,7 +1176,7 @@ public class UpdateFormHandler
         }
         if (parentFormResource == null || parentFormResource.getLocation() == null)
         {
-            // Extension-only / renamed parent object — adopt may still have updated Form.
+            // Extension-only / renamed parent object — nothing to sync onto BaseForm.
             logWarning(
                 "Parent Form.form not found — skip BaseForm file sync. Owner: {0}, form: {1}, base: {2}", //$NON-NLS-1$
                 ownerName, formName, baseFormResource);
@@ -1263,21 +1209,6 @@ public class UpdateFormHandler
         logWarning("BaseForm overwritten from parent Form.form. Owner: {0}, form: {1}, bytes: {2}", //$NON-NLS-1$
             ownerName, formName, Long.valueOf(basePath.toFile().length()));
         return true;
-    }
-
-    private static boolean isCyclicLazyLinks(Throwable throwable)
-    {
-        for (Throwable t = throwable; t != null; t = t.getCause())
-        {
-            String msg = t.getMessage();
-            if (msg != null && msg.contains("Cyclic resolution of lazy links")) //$NON-NLS-1$
-                return true;
-            if (msg != null && msg.contains("CYCLIC_LAZY_LINKS")) //$NON-NLS-1$
-                return true;
-            if (t.toString().contains("Cyclic resolution of lazy links")) //$NON-NLS-1$
-                return true;
-        }
-        return false;
     }
 
     /**

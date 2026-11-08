@@ -16,9 +16,10 @@ Upstream давно без релизов; на EDT 2026.2 стоковый пл
 1. Выбор проекта расширения в workspace.
 2. Поиск adopted-форм, у которых форма в основной конфигурации изменилась.
 3. Таблица с выбором → пакетный **Update**.
-4. После каждого Update — выравнивание id Form → BaseForm (анти-segfault
-   `compileexttocfe --ibcmd`): platform URI + refresh + retry; оставшийся
-   crash-pattern → **Failed**. Агент на диске всё равно гоняет
+4. После каждого Update — **BaseForm ← parent** (без `updateAdopted`), затем
+   выравнивание id Form → BaseForm (анти-segfault `compileexttocfe --ibcmd`);
+   оставшийся crash-pattern → **Failed**. Слой Form (handlers) не
+   пересобирается. Агент на диске всё равно гоняет
    `post_form_update_hygiene.py` (Mac shortcuts + id + orphan).
 
 ## Доработки этого форка
@@ -28,10 +29,12 @@ Upstream давно без релизов; на EDT 2026.2 стоковый пл
 | EDT 2026.2: `bm.integration` / `dt.core.platform` / `compare.*` вне Import-Package | Расширены диапазоны в `META-INF/MANIFEST.MF` |
 | `ExtensionEqualityHelper` → Cyclic lazy links → пустой список | Fallback: сравнение `BaseForm/Form.form` с parent `Form.form` на диске |
 | EMF «разные», EDT compare пустой/висит | Тоже подтверждение через workspace-файлы |
+| `updateAdopted` раздувает Form (реквизиты/команды/элементы) + stubs в `src/` | **Update = BaseForm file sync only** (`v20261108+`); Form layer не трогается adopt’ом |
 | После Update Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: копирует id атрибутов/команд Form → BaseForm |
-| После Update: Adopted ТЧ + Own-реквизит уже из родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell по uuid родителя |
+| После Update: Adopted ТЧ + Own-реквизит уже из родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell по uuid родителя (наследие старых jar) |
 | После Update: ссылки на команды/роли/ФО, которых нет в CFE → ibcmd/Jenkins | `ExtensionMissingRefCleaner`: вырезает незаимствованные refs из Form/BaseForm |
 | После Update: form-level `excludedCommands` с родителя → `Неверное имя команды` Generate/WriteAndClose/Delete/Post | `ExtensionFormLevelExcludedCommandsCleaner`: вырезает form-level (0/2 пробела) из Form/BaseForm; item-level не трогает. Compare игнорирует эти строки |
+| После Update: `commandName` CommonCommand / StandardCommand / orphan `Form.Command` → load CFE | `ExtensionFormCommandNameCleaner`: в Form/BaseForm ставит `0`; свои `formCommands` оставляет. SoT, не post-export scrub |
 | Список снова полный после смены `-data` / ручной чистки BaseForm | Маркеры только в workspace `.metadata/…/parent-sync` + **Accept (no Update)** (никогда в дерево CFE) |
 
 Проверено: EDT **2026.2**, пакетный Update (~129 форм), `Updated: N. Failed: 0`.
@@ -67,9 +70,10 @@ Install New Software с update-site upstream на 2026.2 часто **не** в�
 6. Ждите лог `Updated: N. Failed: 0.` (кнопки серые, пока идёт).
 7. Закройте диалог.
 
-После Update в git часто шум EDT (mass-adopt в `Configuration.mdo`, stub
-объекты) — в коммит расширения кладите только Form/BaseForm и осмысленные
-`.mdo` форм; см. практику в skill `edt-form-update` у операторов ЦФГ.
+С jar `v20261108+` mass-adopt stubs / раздутый `Configuration.mdo` от Update
+не ожидаются (нет `updateAdopted`). В коммит — Form/BaseForm и осмысленные
+`.mdo`; см. skill `edt-form-update`. Уже толстые Form.form плагин сам не
+ужимает — только подтягивает BaseForm.
 
 ### Ограничения
 

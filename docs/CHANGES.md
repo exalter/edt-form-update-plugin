@@ -1,3 +1,16 @@
+## 1.0.2.v20261108 — BaseForm-first Update (no updateAdopted)
+
+- Batch **Update** no longer calls EDT `updateAdopted`. Primary path =
+  copy parent `Form.form` → extension `BaseForm` (EOL preserved), then
+  id-align + missing-ref / excludedCommands / commandName strips + marker.
+- Extension **Form** layer (handlers / intentional deltas) is not rebuilt —
+  avoids Designer “whole form in extension” and mass-adopt stubs in `src/`.
+- Removed `ExtensionAdoptSideEffectCleaner` from the Update happy-path (no
+  post-batch stub rollback as SoT). `ParentAttributeAdoptFix` kept for
+  leftover Own shells from older jars.
+- Already-fat `Form.form` files are not auto-thinned; Update stops making
+  them worse and refreshes BaseForm only.
+
 ## 1.0.2.v20261107d — crash-pattern HARD fail + preserve EOL + BaseForm partial
 
 - After id-align (and again after missing-ref strip): remaining **crash-pattern**

@@ -34,6 +34,23 @@ javac --release 17 -cp "$(cat "$WORK/cp.txt")" -d "$WORK/classes" $(find "$SRC/r
 cd "$WORK/jarpack"
 jar xf "$BASE_JAR"
 cp -R "$WORK/classes/ru" .
+# Incremental pack keeps deleted classes from BASE_JAR — drop orphans (no .java).
+python3 - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+src = Path(sys.argv[1])
+ui = Path("ru/xelgo/edt/formupdate/ui")
+if not ui.is_dir():
+    raise SystemExit(0)
+java_stems = {p.stem for p in (src / "ru/xelgo/edt/formupdate/ui").glob("*.java")}
+removed = 0
+for cls in sorted(ui.glob("*.class")):
+    outer = cls.name.split("$", 1)[0].removesuffix(".class")
+    if outer not in java_stems:
+        cls.unlink()
+        removed += 1
+print(f"pruned orphan classes: {removed}")
+PY
 # NLS properties live next to Java sources (not compiled)
 find "$SRC/ru" -name '*.properties' -print0 | while IFS= read -r -d '' f; do
   rel="${f#"$SRC/"}"
