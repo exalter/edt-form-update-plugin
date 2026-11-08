@@ -653,16 +653,18 @@ public class UpdateFormHandler
     {
         try
         {
-            // Fast path before expensive EMF adopt: workspace sync marker.
+            // Fast path before expensive EMF adopt: dual sync marker (parent+BaseForm).
             Path parentPath = resolveParentFormPath(extensionProject, ownerName, formName);
-            if (parentPath != null)
+            Path basePath = resolveBaseFormPath(extensionProject, ownerName, formName);
+            if (parentPath != null && basePath != null)
             {
                 try
                 {
-                    if (FormUpdateSyncMarker.isCurrent(extensionProject.getProject(), ownerName, formName, parentPath))
+                    if (FormUpdateSyncMarker.isTrusted(extensionProject.getProject(), ownerName, formName, parentPath,
+                        basePath))
                     {
                         logInfo(
-                            "Vendor form update check. Owner: {0}, form: {1}, syncMarker: current → skip", //$NON-NLS-1$
+                            "Vendor form update check. Owner: {0}, form: {1}, syncMarker: trusted → skip", //$NON-NLS-1$
                             ownerName, formName);
                         return null;
                     }
@@ -1214,8 +1216,8 @@ public class UpdateFormHandler
     /**
      * Compare extension BaseForm to parent Form.form when EMF equality fails (Cyclic).
      * <p>
-     * Order: sync-marker (parent digest from last successful Update) → id-stripped XML
-     * equality → otherwise update required. Raw byte equality is wrong after id-align.
+     * Order: dual sync-marker (parent+BaseForm digests) → id-stripped XML equality →
+     * otherwise update required. Raw byte equality is wrong after id-align.
      */
     private boolean isFormUpdateRequiredByWorkspaceFiles(IExtensionProject extensionProject, String ownerName,
         String formName)
@@ -1244,10 +1246,10 @@ public class UpdateFormHandler
         Path parentPath = parentFormResource.getLocation().toFile().toPath();
         try
         {
-            if (FormUpdateSyncMarker.isCurrent(extensionProject.getProject(), ownerName, formName, parentPath))
+            if (FormUpdateSyncMarker.isTrusted(extensionProject.getProject(), ownerName, formName, parentPath, basePath))
             {
                 logInfo(
-                    "Workspace file compare. Owner: {0}, form: {1}, syncMarker: current → skip", //$NON-NLS-1$
+                    "Workspace file compare. Owner: {0}, form: {1}, syncMarker: trusted → skip", //$NON-NLS-1$
                     ownerName, formName);
                 return false;
             }
@@ -1270,6 +1272,16 @@ public class UpdateFormHandler
         }
     }
 
+    private Path resolveBaseFormPath(IExtensionProject extensionProject, String ownerName, String formName)
+    {
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+            true);
+        if (baseFormResource == null || baseFormResource.getLocation() == null)
+            return null;
+        Path path = baseFormResource.getLocation().toFile().toPath();
+        return Files.isRegularFile(path) ? path : null;
+    }
+
     private void writeParentSyncMarker(IExtensionProject extensionProject, String ownerName, String formName)
     {
         IV8Project parentProject = extensionProject.getParent();
@@ -1279,10 +1291,11 @@ public class UpdateFormHandler
             false);
         if (parentFormResource == null || parentFormResource.getLocation() == null)
             return;
+        Path parentPath = parentFormResource.getLocation().toFile().toPath();
+        Path basePath = resolveBaseFormPath(extensionProject, ownerName, formName);
         try
         {
-            FormUpdateSyncMarker.write(extensionProject.getProject(), ownerName, formName,
-                parentFormResource.getLocation().toFile().toPath());
+            FormUpdateSyncMarker.write(extensionProject.getProject(), ownerName, formName, parentPath, basePath);
         }
         catch (IOException e)
         {

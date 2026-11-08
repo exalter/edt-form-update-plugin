@@ -1,3 +1,10 @@
+## 1.0.2.v20261108b — dual sync marker (parent + BaseForm)
+
+- Sync marker stores `parent=` and `base=` SHA-256. Skip only when **both**
+  still match disk. Git restore of BaseForm or parent release bump re-lists.
+- Legacy single-line (parent-only) markers are not trusted alone — Update or
+  Accept once with this jar to rewrite.
+
 ## 1.0.2.v20261108 — BaseForm-first Update (no updateAdopted)
 
 - Batch **Update** no longer calls EDT `updateAdopted`. Primary path =

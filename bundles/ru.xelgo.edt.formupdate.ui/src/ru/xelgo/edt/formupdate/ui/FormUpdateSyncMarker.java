@@ -15,8 +15,8 @@ import org.osgi.framework.Bundle;
 import org.osgi.framework.FrameworkUtil;
 
 /**
- * Remembers which parent {@code Form.form} digest was last accepted for an
- * extension form (after Update, or via Accept-without-Update).
+ * Remembers parent + BaseForm digests last accepted for an extension form
+ * (after Update, or via Accept-without-Update).
  * <p>
  * SoT is <strong>workspace-only</strong> Eclipse plugin state
  * ({@code .metadata/.plugins/ru.xelgo.edt.formupdate.ui/parent-sync/}). Never
@@ -24,27 +24,47 @@ import org.osgi.framework.FrameworkUtil;
  * plugin side files.
  * <p>
  * After id-align / missing-ref sanitize, BaseForm bytes often ≠ parent; without
- * a marker the dialog would re-list forever. Changing EDT {@code -data} loses
- * markers (Accept / Update again) — that is intentional.
+ * a marker the dialog would re-list forever. Marker is trusted only when
+ * <em>both</em> parent and BaseForm digests still match disk — so a git restore
+ * of BaseForm or a parent release bump re-lists the form. Changing EDT
+ * {@code -data} loses markers (Accept / Update again) — that is intentional.
+ * <p>
+ * File format ({@code v20261108b+}):
+ * <pre>
+ * parent=&lt;sha256 of parent Form.form&gt;
+ * base=&lt;sha256 of extension BaseForm/Form.form&gt;
+ * </pre>
+ * Legacy single-line sha256 (parent only) is <strong>not</strong> trusted alone.
  */
 final class FormUpdateSyncMarker
 {
     static final String PLUGIN_ID = "ru.xelgo.edt.formupdate.ui"; //$NON-NLS-1$
     private static final Pattern ID_ELEMENT = Pattern.compile("<id>\\s*\\d+\\s*</id>"); //$NON-NLS-1$
+    private static final String PREFIX_PARENT = "parent="; //$NON-NLS-1$
+    private static final String PREFIX_BASE = "base="; //$NON-NLS-1$
 
     private FormUpdateSyncMarker()
     {
     }
 
-    static void write(IProject extensionProject, String ownerKey, String formName, Path parentFormPath)
-        throws IOException
+    /**
+     * Persist digests of current parent Form.form and extension BaseForm.
+     * {@code baseFormPath} may be null only when BaseForm is missing (marker
+     * will not skip until BaseForm exists and is written again).
+     */
+    static void write(IProject extensionProject, String ownerKey, String formName, Path parentFormPath,
+        Path baseFormPath) throws IOException
     {
         if (extensionProject == null || parentFormPath == null || !Files.isRegularFile(parentFormPath))
             return;
         Path dir = workspaceStateDir();
         if (dir == null)
             return;
-        String digest = sha256Hex(Files.readAllBytes(parentFormPath)) + "\n"; //$NON-NLS-1$
+        String parentDig = sha256Hex(Files.readAllBytes(parentFormPath));
+        String baseDig = ""; //$NON-NLS-1$
+        if (baseFormPath != null && Files.isRegularFile(baseFormPath))
+            baseDig = sha256Hex(Files.readAllBytes(baseFormPath));
+        String digest = PREFIX_PARENT + parentDig + "\n" + PREFIX_BASE + baseDig + "\n"; //$NON-NLS-1$ //$NON-NLS-2$
         for (String key : ownerKeys(ownerKey))
         {
             Path marker = markerFileIn(dir, extensionProject.getName(), key, formName);
@@ -53,23 +73,46 @@ final class FormUpdateSyncMarker
         }
     }
 
-    /** {@code true} when a workspace marker matches the current parent digest. */
-    static boolean isCurrent(IProject extensionProject, String ownerKey, String formName, Path parentFormPath)
-        throws IOException
+    /**
+     * {@code true} when a dual marker matches <em>both</em> current parent and
+     * BaseForm digests. Legacy parent-only markers never trust.
+     */
+    static boolean isTrusted(IProject extensionProject, String ownerKey, String formName, Path parentFormPath,
+        Path baseFormPath) throws IOException
     {
         if (extensionProject == null || parentFormPath == null || !Files.isRegularFile(parentFormPath))
+            return false;
+        if (baseFormPath == null || !Files.isRegularFile(baseFormPath))
             return false;
         Path dir = workspaceStateDir();
         if (dir == null)
             return false;
-        String expected = sha256Hex(Files.readAllBytes(parentFormPath));
+        String expectedParent = sha256Hex(Files.readAllBytes(parentFormPath));
+        String expectedBase = sha256Hex(Files.readAllBytes(baseFormPath));
         for (String key : ownerKeys(ownerKey))
         {
             Path marker = markerFileIn(dir, extensionProject.getName(), key, formName);
             if (!Files.isRegularFile(marker))
                 continue;
-            String actual = Files.readString(marker, StandardCharsets.US_ASCII).trim();
-            if (expected.equalsIgnoreCase(actual))
+            String body = Files.readString(marker, StandardCharsets.US_ASCII).trim();
+            String markedParent = null;
+            String markedBase = null;
+            if (body.contains("\n") || body.startsWith(PREFIX_PARENT)) //$NON-NLS-1$
+            {
+                for (String line : body.split("\\R")) //$NON-NLS-1$
+                {
+                    String t = line.trim();
+                    if (t.regionMatches(true, 0, PREFIX_PARENT, 0, PREFIX_PARENT.length()))
+                        markedParent = t.substring(PREFIX_PARENT.length()).trim();
+                    else if (t.regionMatches(true, 0, PREFIX_BASE, 0, PREFIX_BASE.length()))
+                        markedBase = t.substring(PREFIX_BASE.length()).trim();
+                }
+            }
+            // Legacy single-line parent digest — do not skip (BaseForm may have been
+            // restored from git while parent digest still matched).
+            if (markedParent == null || markedBase == null || markedBase.isEmpty())
+                continue;
+            if (expectedParent.equalsIgnoreCase(markedParent) && expectedBase.equalsIgnoreCase(markedBase))
                 return true;
         }
         return false;
