@@ -1,3 +1,15 @@
+## 1.0.2.v20261109 — scan: disk BaseForm↔parent is authoritative
+
+- Detect/list no longer gates workspace file compare on EMF
+  `!baseEqual && sourceAdopted && freshBaseForm`. Stale CommonForms
+  (ПанельОтчетов, ФормаОтчета, СправкаРасчет, ФормаНастроекОтчета) were
+  skipped when EMF reported equal / adopt failed while BaseForm on disk
+  lagged parent by 1k+ lines.
+- Order: dual sync marker → `equalIgnoringIds` files → EMF only for Message /
+  log. Outer check failure still tries file compare before skipping.
+- Message extras: `BaseForm ≠ parent (files)`, `(files; EMF equal)`,
+  `(check failed; files)`.
+
 ## 1.0.2.v20261108b — dual sync marker (parent + BaseForm)
 
 - Sync marker stores `parent=` and `base=` SHA-256. Skip only when **both**

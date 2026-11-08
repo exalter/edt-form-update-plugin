@@ -55,7 +55,8 @@ Adopted-форма в расширении = слой **Form** (доработк
 | Проблема | Решение |
 |----------|---------|
 | EDT 2026.2: `bm.integration` / `dt.core.platform` / `compare.*` вне Import-Package | Расширены диапазоны в `META-INF/MANIFEST.MF` |
-| `ExtensionEqualityHelper` → Cyclic → пустой список | Fallback: сравнение `BaseForm` с parent `Form.form` на диске |
+| `ExtensionEqualityHelper` → Cyclic → пустой список | Сравнение `BaseForm` с parent `Form.form` на диске (авторитетно) |
+| EMF «равны» / adopt пустой, а BaseForm на диске старый | `v20261109+`: список по файлам, EMF только в Message |
 | EMF «разные», compare пустой/висит | То же подтверждение через файлы workspace |
 | `updateAdopted` раздувает Form + stubs в `src/` | Update = sync BaseForm (`v20261108+`); Form adopt’ом не трогается |
 | Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: id Form → BaseForm |

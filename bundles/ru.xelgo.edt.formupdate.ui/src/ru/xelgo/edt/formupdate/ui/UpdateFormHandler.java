@@ -647,6 +647,13 @@ public class UpdateFormHandler
 
     /**
      * {@code null} = do not list; otherwise short reason for the Message column.
+     * <p>
+     * Authoritative signal = workspace files ({@code BaseForm} vs parent
+     * {@code Form.form}, ignoring {@code <id>} / form-level excludedCommands) and
+     * dual sync markers. EMF adopt/equality is advisory only: historically gating
+     * the file compare on {@code !baseEqual && sourceAdopted && freshBaseForm}
+     * silently dropped CommonForms whose BaseForm lagged parent on disk while EMF
+     * reported equal / adopt failed (ПанельОтчетов, ФормаОтчета, …).
      */
     private String updateRequiredReason(IExtensionProject extensionProject, IModelObjectAdopter modelObjectAdopter,
         Form adoptedForm, Form sourceForm, String ownerName, String formName)
@@ -676,6 +683,17 @@ public class UpdateFormHandler
                 }
             }
 
+            // Disk first: list whenever BaseForm bytes ≠ parent (after normalize).
+            // Marker already handled above inside isFormUpdateRequiredByWorkspaceFiles too.
+            boolean filesRequireUpdate = isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName);
+            if (!filesRequireUpdate)
+            {
+                logInfo(
+                    "Vendor form update check. Owner: {0}, form: {1}, workspace files: equal → skip", //$NON-NLS-1$
+                    ownerName, formName);
+                return null;
+            }
+
             Form currentBaseForm = adoptedForm != null ? adoptedForm.getBaseForm() : null;
             if (currentBaseForm == null)
                 currentBaseForm = loadBaseForm(adoptedForm, extensionProject, ownerName, formName);
@@ -696,41 +714,42 @@ public class UpdateFormHandler
                 {
                     // EDT 2026.2+: ExtensionEqualityHelper often throws
                     // AssertionError: Cyclic resolution of lazy links (Picture/…).
-                    // EMF unequal-or-failed → compare BaseForm vs parent Form.form on disk.
                     equalityFailed = true;
                     logWarning(
-                        "Vendor base equality check failed. Owner: {0}, form: {1}, fallback: workspace files, error: {2}", //$NON-NLS-1$
+                        "Vendor base equality check failed. Owner: {0}, form: {1}, files already require update, error: {2}", //$NON-NLS-1$
                         ownerName, formName, e.toString());
                 }
             }
-            boolean updateRequired = false;
-            String reason = null;
-            if (sourceAdopted && currentBaseForm != null && freshBaseForm != null && !baseEqual)
-            {
-                // After BaseForm sync + id-align, EMF almost always reports unequal
-                // (extension-range ids on BaseForm vs parent ids on fresh adopt).
-                // Disk marker / equalIgnoringIds is authoritative — do not let EDT
-                // compare alone re-list every form after a successful Update.
-                updateRequired = isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName);
-                if (updateRequired)
-                    reason = equalityFailed ? "BaseForm ≠ parent (EMF Cyclic)" : "BaseForm ≠ parent"; //$NON-NLS-1$ //$NON-NLS-2$
-                if (updateRequired && !equalityFailed)
-                {
-                    logInfo(
-                        "EMF base unequal; workspace files require update. Owner: {0}, form: {1}", //$NON-NLS-1$
-                        ownerName, formName);
-                }
-            }
+            String reason;
+            if (equalityFailed)
+                reason = "BaseForm ≠ parent (EMF Cyclic)"; //$NON-NLS-1$
+            else if (!sourceAdopted || freshBaseForm == null)
+                reason = "BaseForm ≠ parent (files)"; //$NON-NLS-1$
+            else if (baseEqual)
+                reason = "BaseForm ≠ parent (files; EMF equal)"; //$NON-NLS-1$
+            else
+                reason = "BaseForm ≠ parent"; //$NON-NLS-1$
             logInfo(
-                "Vendor form update check. Owner: {0}, form: {1}, sourceAdopted: {2}, baseEqual: {3}, equalityFailed: {4}, updateRequired: {5}, currentBaseForm: {6}, freshBaseForm: {7}", //$NON-NLS-1$
-                ownerName, formName, sourceAdopted, baseEqual, equalityFailed, updateRequired,
+                "Vendor form update check. Owner: {0}, form: {1}, sourceAdopted: {2}, baseEqual: {3}, equalityFailed: {4}, filesRequireUpdate: true, reason: {5}, currentBaseForm: {6}, freshBaseForm: {7}", //$NON-NLS-1$
+                ownerName, formName, sourceAdopted, baseEqual, equalityFailed, reason,
                 describeEObject(currentBaseForm), describeEObject(freshBaseForm));
-            return updateRequired ? reason : null;
+            return reason;
         }
         catch (RuntimeException | AssertionError e)
         {
             logWarning("Vendor form update check failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
                 ownerName, formName, e.toString());
+            // Last resort: still list if workspace files disagree (do not hide stale BaseForm).
+            try
+            {
+                if (isFormUpdateRequiredByWorkspaceFiles(extensionProject, ownerName, formName))
+                    return "BaseForm ≠ parent (check failed; files)"; //$NON-NLS-1$
+            }
+            catch (RuntimeException | AssertionError nested)
+            {
+                logWarning("Workspace file compare after check failure also failed. Owner: {0}, form: {1}, error: {2}", //$NON-NLS-1$
+                    ownerName, formName, nested.toString());
+            }
             return null;
         }
     }
