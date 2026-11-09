@@ -1,120 +1,72 @@
-# EDT Form Update (форк под EDT 2026.1 / 2026.2)
+# Плагин обновления форм расширения EDT
 
-Публичный форк [Xelgo/edt-form-update-plugin](https://github.com/Xelgo/edt-form-update-plugin)
-с правками под **1C:EDT 2026.1** и **2026.2**.
+Плагин для **1C:EDT 2026.1** и **2026.2**.
 
-Upstream давно без релизов. На EDT 2026.2 стоковый плагин либо не ставится
-(OSGi Import-Package), либо поиск форм падает с
-`AssertionError: Cyclic resolution of lazy links` и в диалоге «No updatable forms».
+После обновления основной конфигурации (СиО или новая версия УМФО) формы в
+расширении часто отстают от родителя. Плагин находит такие формы и пакетно
+подтягивает снимок из основной конфигурации. Слой доработок расширения при
+этом не раздувается.
 
-Лицензия исходника: **Eclipse Public License 2.0** (`LICENSE`, `NOTICE`).
+Публичный форк [Xelgo/edt-form-update-plugin](https://github.com/Xelgo/edt-form-update-plugin).
+На EDT 2026.2 стоковый плагин часто не ставится или не находит формы.
 
-## Зачем этот форк
+Лицензия: **Eclipse Public License 2.0** (`LICENSE`, `NOTICE`).
 
-Adopted-форма в расширении = слой **Form** (доработки расширения) + **BaseForm**
-(снимок формы из основной конфигурации).
+## Когда пользоваться
 
-Старый путь EDT `updateAdopted` копировал в Form родителя целиком: в Конфигураторе
-форма выглядела «вся в расширении», в git раздувались Form и stubs в `src/`.
+После слияния с основной конфигурацией или выкладки новой УМФО, если BaseForm
+в расширении устарел относительно Form родителя. Перед коммитом и сборкой
+расширения прогоните Update по отмеченным формам и проверьте экспорт проекта.
 
-Этот форк при **Update** так не делает.
+## Как запустить
 
-## Что делает Update
+В EDT откройте меню **Проект**, пункт **Обновить формы расширения**.
 
-Меню: **Проект → Обновить формы расширения**.
+![Меню Проект → Обновить формы расширения](docs/screenshots/edt-form-update-menu.png)
 
-1. Ищет adopted-формы, у которых форма в основной конфигурации ушла вперёд
-   относительно BaseForm (и маркеров sync).
-2. По выбранным строкам:
-   - копирует parent `Form.form` → `BaseForm/Form.form` (EOL файла расширения
-     сохраняется);
-   - **пересобирает Form = BaseForm + overlays** (`EventHandlerExtension`,
-     ЦФГ `formCommands`, own `OnCreateAtServer`/`OnReadAtServer`) — урок
-     MR-1938: handlers-only Form ломает xunit (`Объект`/`ПрименениеУСН`);
-     **не трогает** Form, если есть `Form*Extension`, item-level ЦФГ handlers
-     или item/attribute `<name>` вне BaseForm (plain `цфг_*` поля — урок
-     мфо_НачислениеРезервов);
-   - выравнивает id атрибутов/команд Form → BaseForm (иначе часто segfault
-     `compileexttocfe --ibcmd`);
-   - вырезает из Form/BaseForm form-level `excludedCommands`, ссылки на
-     команды/роли/ФО, которых нет в расширении, и часть опасных `commandName`;
-   - пишет sync-маркер только в workspace (не в дерево CFE).
-3. Crash-pattern id после align → строка **Failed**, не тихий Success.
+Выберите проект расширения (например `Ортикон.ЦФГ`) и нажмите OK.
 
-## Чего Update не делает
+![Выбор проекта расширения](docs/screenshots/edt-form-update-select-extension.png)
 
-- не вызывает `updateAdopted`;
-- не оставляет handlers-only Form в git (с `v20261109d+` сам
-  Form=BaseForm+overlays);
-- не кладёт маркеры sync в git расширения.
+Подождите поиск форм.
 
-После пакетного Update агент на диске всё равно гоняет
-`post_form_update_hygiene.py` (orphan Adopted, thin-report; id / excludedCommands /
-Mac shortcuts / Form layer плагин уже делает сам с `v20261109d+`).
+![Поиск форм расширения](docs/screenshots/edt-form-update-searching.png)
 
-## Доработки форка
+В диалоге появится список кандидатов: форма, объект, сообщение. Часто в
+сообщении видно `BaseForm ≠ parent`.
 
-| Проблема | Решение |
-|----------|---------|
-| EDT 2026.2: `bm.integration` / `dt.core.platform` / `compare.*` вне Import-Package | Расширены диапазоны в `META-INF/MANIFEST.MF` |
-| `ExtensionEqualityHelper` → Cyclic → пустой список | Сравнение `BaseForm` с parent `Form.form` на диске (авторитетно) |
-| EMF «равны» / adopt пустой, а BaseForm на диске старый | `v20261109+`: список по файлам, EMF только в Message |
-| EMF «разные», compare пустой/висит | То же подтверждение через файлы workspace |
-| `updateAdopted` раздувает Form + stubs в `src/` | Update = sync BaseForm (`v20261108+`); Form adopt’ом не трогается |
-| Form id `100000x`, BaseForm `1..N` → segfault ibcmd | `FormIdConsistency`: id Form → BaseForm |
-| Adopted ТЧ + Own-реквизит с родителя → дубль CFE | `ParentAttributeAdoptFix`: Own→Adopted shell (хвосты старых jar) |
-| Ссылки на команды/роли/ФО не из CFE | `ExtensionMissingRefCleaner` |
-| form-level `excludedCommands` → «Неверное имя команды» | Cleaner после последнего align; HARD fail если остались (`v20261109a+`); regex без `\s*` до EOL (`v20261109b+`) |
-| Mac `<shortcut>Cmd+/Option+` в git CFE | `ExtensionFormShortcutNormalizer` early+final HARD (`v20261109c+`) |
-| handlers-only Form → xunit `Объект`/`ПрименениеУСН` | `ExtensionFormLayerRebuilder`: Form=BaseForm+overlays (`v20261109d+`); keep fat if names beyond BaseForm (`v20261109e+`) |
-| `commandName` CommonCommand / StandardCommand / orphan `Form.Command` | `ExtensionFormCommandNameCleaner` → `0` |
-| Список снова полный после смены `-data` / ручной чистки | Маркеры в `.metadata/…/parent-sync` + **Accept (no Update)** |
+![Список форм BaseForm ≠ parent](docs/screenshots/edt-form-update-list.png)
 
-Проверено: EDT **2026.2**, пакетный Update (~129 форм), `Updated: N. Failed: 0`.
+Отметьте нужные строки (или **Select all**) и нажмите **Update**.
 
-## Быстрая установка (macOS, EDT 2026.2)
+## Кнопки в диалоге
 
-Надёжный путь на shared p2: jar в `~/.p2/pool/plugins` + строка в `bundles.info`
-(одного `dropins/` часто мало).
+**Update** обновляет выбранные формы: BaseForm берётся из родителя,
+выравниваются id, чистятся опасные ссылки и form-level `excludedCommands`.
+Слой доработок расширения плагин сохраняет. Толстую Form с полями расширения
+сверх BaseForm он не пересобирает.
+
+**Accept (no Update)** запоминает текущее состояние без правки файлов, чтобы
+список не повторялся, пока родитель снова не изменится.
+
+**Закрыть** выходит без действий.
+
+## Результат
+
+После прогона в шапке видно Updated и Failed. В логе по каждой форме написано,
+что сделано. Нормальный исход: `Failed: 0`.
+
+![Результат Updated / Failed](docs/screenshots/edt-form-update-result.png)
+
+## Установка
+
+Кратко для macOS + EDT 2026.2: jar в `~/.p2/pool/plugins` и строка в
+`bundles.info` (одного `dropins/` часто мало).
 
 Подробно: **[docs/INSTALL-EDT-2026.md](docs/INSTALL-EDT-2026.md)**.
 
-1. Закройте EDT.
-2. Jar из [Releases](../../releases) или своя сборка.
-3. В `~/.p2/pool/plugins/ru.xelgo.edt.formupdate.ui_<version>.jar`.
-4. В `…/1C_EDT 2026.2/…/bundles.info` - строка на новый Bundle-Version; старые
-   `ru.xelgo.edt.formupdate` уберите.
-5. EDT с `-data` = workspace (конфигурация + расширение).
-6. Критерий: меню **Проект → Обновить формы расширения**; в `.log` нет
-   `BundleException` по `formupdate`.
-
-Install New Software с update-site upstream на 2026.2 часто не встаёт из‑за
-узких Import-Package - берите jar этого форка.
-
-## Использование
-
-1. Workspace: расширение (например `Ортикон.ЦФГ`) и parent-конфигурация.
-2. Дождаться конца активации проектного контекста.
-3. **Проект → Обновить формы расширения**.
-4. Выбрать расширение → список не «No updatable».
-5. Нужные строки (или Select all) → **Update**.
-6. Дождаться `Updated: N. Failed: 0.` (кнопки серые, пока идёт).
-7. Закрыть диалог.
-
-С `v20261108+` mass-adopt stubs и раздутый `Configuration.mdo` от Update не
-ожидаются. В коммит - Form/BaseForm и осмысленные `.mdo`; см. skill
-`edt-form-update`.
-
-**Accept (no Update)** - записать workspace-маркеры без sync: форма пропала из
-списка после ручной чистки BaseForm, пока parent снова не изменится.
-
-### Ограничения
-
-- Тяжёлые формы иногда проще через Конфигуратор и выгрузку в git.
-- Id-align снимает crash-pattern, но не заменяет смысловую адаптацию контента.
-- После Update могут понадобиться adopt Enum/ФО под новые типы в формах
-  (иначе `compileexttocfe` падает на XDTO `Type`).
-- Уже толстый Form плагин сам до handlers-only не ужимает.
+Критерий: в меню есть **Проект → Обновить формы расширения**, в `.log` нет
+`BundleException` по `formupdate`.
 
 ## Сборка из исходников
 
@@ -125,8 +77,7 @@ cd edt-form-update-plugin
 mvn -DskipTests clean verify
 ```
 
-Артефакты в `repositories/` и `bundles/…/target/`. Для Mac shared p2 достаточно
-jar UI-бандла. Qualifier Tycho; в `bundles.info` удобнее
+Jar UI-бандла: `bundles/…/target/`. Qualifier Tycho; в `bundles.info` удобнее
 `1.0.2.vYYYYMMDDHHMM`.
 
 ## Совместимость
@@ -135,15 +86,18 @@ jar UI-бандла. Qualifier Tycho; в `bundles.info` удобнее
 |-----|-----------|
 | 2026.2 | да (основная цель) |
 | 2026.1 | да |
-| 2025.x | возможно; ориентир - upstream Xelgo |
+| 2025.x | ориентир — upstream Xelgo |
 
-Java: **17** (Bundle-RequiredExecutionEnvironment).
+Java: **17** (`Bundle-RequiredExecutionEnvironment`).
 
-## Связь с upstream
+## Что изменено относительно Xelgo
 
-- Исходник: https://github.com/Xelgo/edt-form-update-plugin
-- Здесь - публичный форк с патчами под EDT 2026.x.
-- PR в upstream приветствуется, если автор возобновит поддержку.
+Список патчей и технические детали: **[docs/CHANGES.md](docs/CHANGES.md)**.
+
+Кратко: Update не вызывает EDT `updateAdopted` (не раздувает Form), синхронизирует
+BaseForm с родителем по файлам, выравнивает id, чистит опасные `commandName` /
+`excludedCommands` / Mac-shortcuts, при необходимости пересобирает Form как
+BaseForm + overlays (не срезает поля расширения сверх BaseForm).
 
 ## Документация
 
