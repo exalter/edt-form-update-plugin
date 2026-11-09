@@ -86,7 +86,7 @@ Jar UI-бандла: `bundles/…/target/`. Qualifier Tycho; в `bundles.info` �
 |-----|-----------|
 | 2026.2 | да (основная цель) |
 | 2026.1 | да |
-| 2025.x | ориентир — upstream Xelgo |
+| 2025.x | ориентир - upstream Xelgo |
 
 Java: **17** (`Bundle-RequiredExecutionEnvironment`).
 
