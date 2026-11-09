@@ -28,28 +28,27 @@ Adopted-форма в расширении = слой **Form** (доработк
 2. По выбранным строкам:
    - копирует parent `Form.form` → `BaseForm/Form.form` (EOL файла расширения
      сохраняется);
+   - **пересобирает Form = BaseForm + overlays** (`EventHandlerExtension`,
+     ЦФГ `formCommands`, own `OnCreateAtServer`/`OnReadAtServer`) — урок
+     MR-1938: handlers-only Form ломает xunit (`Объект`/`ПрименениеУСН`);
+     формы с ЦФГ item-overlay не трогает;
    - выравнивает id атрибутов/команд Form → BaseForm (иначе часто segfault
      `compileexttocfe --ibcmd`);
    - вырезает из Form/BaseForm form-level `excludedCommands`, ссылки на
      команды/роли/ФО, которых нет в расширении, и часть опасных `commandName`;
    - пишет sync-маркер только в workspace (не в дерево CFE).
-3. Слой **Form** adopt’ом не пересобирает: handlers и осознанная дельта
-   расширения остаются как были.
-4. Crash-pattern id после align → строка **Failed**, не тихий Success.
+3. Crash-pattern id после align → строка **Failed**, не тихий Success.
 
 ## Чего Update не делает
 
 - не вызывает `updateAdopted`;
-- не ужимает уже толстый Form до «только обработчики» - чинит устаревший
-  BaseForm и гигиену load, исторический жирный Form оставляет;
+- не оставляет handlers-only Form в git (с `v20261109d+` сам
+  Form=BaseForm+overlays);
 - не кладёт маркеры sync в git расширения.
-
-Опциональный ужим Form до handlers-only - отдельный скрипт
-(`thin_adopted_form_layer.py` в skill `edt-form-update`), не часть плагина.
 
 После пакетного Update агент на диске всё равно гоняет
 `post_form_update_hygiene.py` (orphan Adopted, thin-report; id / excludedCommands /
-Mac shortcuts плагин уже делает сам с `v20261109c+`).
+Mac shortcuts / Form layer плагин уже делает сам с `v20261109d+`).
 
 ## Доработки форка
 
@@ -65,6 +64,7 @@ Mac shortcuts плагин уже делает сам с `v20261109c+`).
 | Ссылки на команды/роли/ФО не из CFE | `ExtensionMissingRefCleaner` |
 | form-level `excludedCommands` → «Неверное имя команды» | Cleaner после последнего align; HARD fail если остались (`v20261109a+`); regex без `\s*` до EOL (`v20261109b+`) |
 | Mac `<shortcut>Cmd+/Option+` в git CFE | `ExtensionFormShortcutNormalizer` early+final HARD (`v20261109c+`) |
+| handlers-only Form → xunit `Объект`/`ПрименениеУСН` | `ExtensionFormLayerRebuilder`: Form=BaseForm+overlays (`v20261109d+`) |
 | `commandName` CommonCommand / StandardCommand / orphan `Form.Command` | `ExtensionFormCommandNameCleaner` → `0` |
 | Список снова полный после смены `-data` / ручной чистки | Маркеры в `.metadata/…/parent-sync` + **Accept (no Update)** |
 

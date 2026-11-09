@@ -183,11 +183,18 @@ public class UpdateFormHandler
                 {
                     if (monitor.isCanceled())
                         throw new CoreException(new Status(IStatus.CANCEL, PLUGIN_ID, "Update cancelled")); //$NON-NLS-1$
+                    // Capture Form overlays before BaseForm sync / Form rebuild (MR-1938).
+                    String formOverlayXml = readFormOverlayXml(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName());
                     // Primary path: refresh BaseForm from parent Form.form only. Do NOT call
                     // updateAdopted — it fattens Form (attrs/commands/items) and mass-adopts
-                    // stubs into the extension project. Extension Form layer (handlers) stays.
+                    // stubs into the extension project.
                     boolean synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor);
+                    // Rebuild Form = BaseForm + EventHandlerExtension / ЦФГ formCommands /
+                    // own OnCreate|OnRead (handlers-only Form breaks xunit runtime).
+                    int formLayerRebuilds = rebuildFormLayerFromBaseForm(extensionProject,
+                        candidate.getOwnerName(), candidate.getFormName(), formOverlayXml, monitor);
                     // Early strip right after copy so later EMF id-align does not keep
                     // parent form-level excludedCommands in the resource set / disk.
                     int strippedExclEarly = stripFormLevelExcludedCommands(extensionProject,
@@ -251,9 +258,13 @@ public class UpdateFormHandler
                     if (normalizedShortcuts > 0)
                         candidate.setMessage(
                             candidate.getMessage() + "; normalized Mac shortcuts=" + normalizedShortcuts); //$NON-NLS-1$
+                    if (formLayerRebuilds > 0)
+                        candidate.setMessage(
+                            candidate.getMessage() + "; Form=BaseForm+overlays"); //$NON-NLS-1$
                     committed = true;
-                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, synced: {2}", //$NON-NLS-1$
-                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(synced));
+                    logInfo("Updating candidate finished. Owner: {0}, form: {1}, synced: {2}, formLayer: {3}", //$NON-NLS-1$
+                        candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(synced),
+                        Integer.valueOf(formLayerRebuilds));
                 }
                 catch (CoreException e)
                 {
@@ -1292,9 +1303,75 @@ public class UpdateFormHandler
     }
 
     /**
+     * Read Adopted Form.form text for overlay capture (before BaseForm sync / rebuild).
+     */
+    private String readFormOverlayXml(IExtensionProject extensionProject, String ownerName, String formName)
+    {
+        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName, false);
+        if (formResource == null || formResource.getLocation() == null)
+            return null;
+        Path formPath = formResource.getLocation().toFile().toPath();
+        try
+        {
+            if (!Files.isRegularFile(formPath) || Files.size(formPath) == 0L)
+                return null;
+            return Files.readString(formPath);
+        }
+        catch (IOException e)
+        {
+            logWarning("Could not read Form overlay XML. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                e.toString());
+            return null;
+        }
+    }
+
+    /**
+     * After BaseForm←parent: set Form = BaseForm + captured EventHandlerExtension /
+     * ЦФГ formCommands / own OnCreate|OnRead (MR-1938). Skips ЦФГ item-overlay forms.
+     *
+     * @return 1 when Form was rewritten, 0 when skipped
+     */
+    private int rebuildFormLayerFromBaseForm(IExtensionProject extensionProject, String ownerName, String formName,
+        String overlaySourceXml, IProgressMonitor monitor) throws CoreException
+    {
+        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName, false);
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+            true);
+        if (formResource == null || formResource.getLocation() == null || baseFormResource == null
+            || baseFormResource.getLocation() == null)
+        {
+            logWarning("Form layer rebuild skipped (paths). Owner: {0}, form: {1}", ownerName, formName); //$NON-NLS-1$
+            return 0;
+        }
+        Path formPath = formResource.getLocation().toFile().toPath();
+        Path basePath = baseFormResource.getLocation().toFile().toPath();
+        try
+        {
+            ExtensionFormLayerRebuilder.Result result =
+                ExtensionFormLayerRebuilder.rebuild(formPath, basePath, overlaySourceXml);
+            if (result.rewritten)
+            {
+                formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                logWarning("Form rebuilt as BaseForm+overlays. Owner: {0}, form: {1}, {2}", ownerName, formName, //$NON-NLS-1$
+                    result.detail);
+                return 1;
+            }
+            logInfo("Form layer rebuild skipped. Owner: {0}, form: {1}, reason: {2}", ownerName, formName, //$NON-NLS-1$
+                result.detail);
+            return 0;
+        }
+        catch (IOException e)
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                "Form layer rebuild failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, e.toString()), //$NON-NLS-1$
+                e));
+        }
+    }
+
+    /**
      * Primary Update step: copy parent configuration {@code Form.form} onto extension
-     * {@code BaseForm/Form.form} without EMF {@code updateAdopted}. Leaves the extension
-     * Form layer (handlers / intentional deltas) untouched.
+     * {@code BaseForm/Form.form} without EMF {@code updateAdopted}. Then
+     * {@link #rebuildFormLayerFromBaseForm} restores extension overlays onto Form.
      *
      * @return {@code true} when BaseForm was overwritten from parent; {@code false} when
      *         parent Form.form is missing (soft — do not fail the row).
