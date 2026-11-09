@@ -22,12 +22,12 @@ import org.eclipse.core.runtime.CoreException;
  * present in the extension (object commands, common commands, roles, functional
  * options). That breaks {@code ibcmd}/Jenkins even when BaseForm sync is correct.
  * <p>
- * Strip {@code commandName} / {@code role} / {@code functionalOptions} from
- * extension {@code Form.form} and {@code BaseForm} when the target is missing
- * from the extension project. Keep {@code Form.*} command names. Do not touch
- * command-interface {@code <command>} rows (navigation; rare in MR cleanup).
- * Parent sync markers still use the raw parent digest so sanitized BaseForm
- * does not re-list forever.
+ * Strip {@code commandName} / {@code role} / {@code functionalOptions} /
+ * {@code CommonPicture.*} picture refs from extension {@code Form.form} and
+ * {@code BaseForm} when the target is missing from the extension project.
+ * Keep {@code Form.*} command names. Do not touch command-interface
+ * {@code <command>} rows (navigation; rare in MR cleanup). Parent sync markers
+ * still use the raw parent digest so sanitized BaseForm does not re-list forever.
  */
 final class ExtensionMissingRefCleaner
 {
@@ -37,6 +37,9 @@ final class ExtensionMissingRefCleaner
         "^([ \\t]*)<role>([^<]+)</role>\\s*$", Pattern.MULTILINE); //$NON-NLS-1$
     private static final Pattern FUNCTIONAL_OPTION = Pattern.compile(
         "^([ \\t]*)<functionalOptions>([^<]+)</functionalOptions>\\s*$", Pattern.MULTILINE); //$NON-NLS-1$
+    /** Inner picture line of PictureRef — CommonPicture.X not adopted into CFE. */
+    private static final Pattern PICTURE = Pattern.compile(
+        "^([ \\t]*)<picture>(CommonPicture\\.[^<]+)</picture>\\s*$", Pattern.MULTILINE); //$NON-NLS-1$
     private static final Pattern MDO_COMMAND_NAME = Pattern.compile(
         "<commands\\b[^>]*>.*?<name>([^<]+)</name>", Pattern.DOTALL); //$NON-NLS-1$
 
@@ -150,6 +153,7 @@ final class ExtensionMissingRefCleaner
         String text = strip(COMMAND_NAME, xml, counter, RefKind.COMMAND);
         text = strip(ROLE, text, counter, RefKind.ROLE);
         text = strip(FUNCTIONAL_OPTION, text, counter, RefKind.FUNCTIONAL_OPTION);
+        text = strip(PICTURE, text, counter, RefKind.PICTURE);
         return new Rewrite(text, counter.value);
     }
 
@@ -193,7 +197,7 @@ final class ExtensionMissingRefCleaner
 
     private enum RefKind
     {
-        COMMAND, ROLE, FUNCTIONAL_OPTION
+        COMMAND, ROLE, FUNCTIONAL_OPTION, PICTURE
     }
 
     private static final class Counter

@@ -138,6 +138,12 @@ final class FormUpdateSyncMarker
         text = text.replace("\r\n", "\n").replace('\r', '\n'); //$NON-NLS-1$ //$NON-NLS-2$
         text = FORM_LEVEL_EXCLUDED.matcher(text).replaceAll(""); //$NON-NLS-1$
         text = ExtensionFormShortcutNormalizer.rewrite(text).text;
+        // Same hygiene Update strips — otherwise BaseForm after sanitize ≠ parent
+        // forever (commandName 0→empty, missing CommonPicture, role/FO) → eternal list.
+        text = text.replaceAll("(?s)<commandName>.*?</commandName>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        text = text.replaceAll("(?s)<role>.*?</role>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        text = text.replaceAll("(?s)<functionalOptions>.*?</functionalOptions>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        text = text.replaceAll("(?s)<picture>\\s*CommonPicture\\.[^<]*</picture>\\s*", ""); //$NON-NLS-1$ //$NON-NLS-2$
         return ID_ELEMENT.matcher(text).replaceAll("<id>*</id>"); //$NON-NLS-1$
     }
 

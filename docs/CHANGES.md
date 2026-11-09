@@ -1,3 +1,46 @@
+## 1.0.2.v20261109h — adapted forms: no silent rewrite / no export break
+
+Operator expectation: after forms are already adapted, **Update must not
+change Form/BaseForm** (and must not break `1cedtcli export`).
+
+- **Detect/compare** (`FormUpdateSyncMarker.normalize`): also ignore
+  `commandName` / `role` / `functionalOptions` / `CommonPicture.*` picture
+  tags (same hygiene Update strips). Stops eternal re-list after sanitize
+  cleared `commandName>0` or missing pictures while parent still has them.
+- **BaseForm←parent skipped** when Form is hollow, Report/DataProcessor,
+  has `EventHandlerExtension` / `ЦФГ_` / `Form*Extension` / names beyond
+  BaseForm. Those rows get hygiene + sync **marker** only (Accept-class).
+- **Unchanged (marker only)** when Form+BaseForm bytes identical after the
+  pipeline — no git noise from empty sanitize passes.
+
+## 1.0.2.v20261109g — Adopted Form button wiring after Update
+
+- After Update (rebuild **and** keep-fat): strip plain
+  `FormCommandHandlerContainer` actions from **Form** (parent Module procs —
+  they stay on BaseForm). Keep ЦФГ `FormExtensionCommandHandlerContainer`.
+- Restore `<commandName>Form.Command.*</commandName>` on buttons from the
+  pre-Update Form overlay when missing (урок мфо_НачислениеРезервов:
+  Form без commandName + action на Form → кнопки Заполнить/Подробности).
+
+## 1.0.2.v20261109f — Update must not break export/compile
+
+Contract: after **Update** the Adopted form stays loadable by `1cedtcli export`
+and `compileexttocfe` — no manual git restore / post-scrub required for cases
+the plugin itself created.
+
+- **Hollow Form** (`<attributes>` count = 0): do **not** copy parent → BaseForm.
+  Inflating a legacy empty Adopted shell caused Form hollow + BaseForm full
+  (export NPE / IndexOutOfBounds) or both-full ReportAttribute /
+  DataProcessorAttribute / XDTO Type on Reports/DataProcessors.
+- **Form rebuild**: keep-fat only for `Form*Extension` item types and for
+  item/attr `<name>` absent from BaseForm. Item-level `EventHandlerExtension` /
+  `ЦФГ_*` handlers no longer block rebuild — they are **re-injected** into the
+  matching `<items><name>…` after Form:=BaseForm+overlays.
+- **HARD assert** after writes: Form attrs=0 and BaseForm attrs>5 → row Failed +
+  workspace restore (never leave hollow/full mismatch).
+- **Missing refs**: also strip `<picture>CommonPicture.X</picture>` when X is
+  not adopted into the extension (XDTO Picture / `ЗагрузитьЧекиПоQRКоду`).
+
 ## 1.0.2.v20261109c — Mac shortcut normalize inside Update
 
 - After BaseForm←parent (early + final HARD): rewrite `<shortcut>` bodies

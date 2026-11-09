@@ -186,13 +186,34 @@ public class UpdateFormHandler
                     // Capture Form overlays before BaseForm sync / Form rebuild (MR-1938).
                     String formOverlayXml = readFormOverlayXml(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName());
+                    boolean formHollow = ExtensionFormLayerRebuilder.isHollow(formOverlayXml);
+                    byte[] formBefore = readFormLayerBytes(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), false);
+                    byte[] baseBefore = readFormLayerBytes(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), true);
                     // Primary path: refresh BaseForm from parent Form.form only. Do NOT call
                     // updateAdopted — it fattens Form (attrs/commands/items) and mass-adopts
                     // stubs into the extension project.
-                    boolean synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
-                        candidate.getFormName(), monitor);
+                    // HARD: never inflate hollow Form; skip parent sync when Form is already
+                    // adapted (structural overlay) or Report/DataProcessor (export NPE / Type).
+                    boolean synced = false;
+                    String skipParentReason = skipBaseFormParentSyncReason(candidate.getOwnerName(),
+                        formOverlayXml, extensionProject, candidate.getFormName());
+                    if (skipParentReason != null)
+                    {
+                        logWarning(
+                            "Skipped BaseForm←parent ({0}). Owner: {1}, form: {2}", //$NON-NLS-1$
+                            skipParentReason, candidate.getOwnerName(), candidate.getFormName());
+                    }
+                    else
+                    {
+                        synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
+                            candidate.getFormName(), monitor);
+                    }
                     // Rebuild Form = BaseForm + EventHandlerExtension / ЦФГ formCommands /
-                    // own OnCreate|OnRead (handlers-only Form breaks xunit runtime).
+                    // own OnCreate|OnRead / item-level ЦФГ handlers. If Form was hollow and
+                    // BaseForm already full (stale bad sync), rebuild aligns Form without
+                    // pulling more parent content.
                     int formLayerRebuilds = rebuildFormLayerFromBaseForm(extensionProject,
                         candidate.getOwnerName(), candidate.getFormName(), formOverlayXml, monitor);
                     // Early strip right after copy so later EMF id-align does not keep
@@ -236,11 +257,31 @@ public class UpdateFormHandler
                     int normalizedShortcuts = normalizeFormShortcuts(extensionProject, candidate.getOwnerName(),
                         candidate.getFormName(), monitor, true);
                     normalizedShortcuts += normalizedShortcutsEarly;
+                    // Adopted Form: drop parent formCommands actions; restore Form.Command.*
+                    // from pre-Update overlay (keep-fat / EMF can leave broken button wiring).
+                    int formCmdWiring = sanitizeAdoptedFormCommandWiring(extensionProject,
+                        candidate.getOwnerName(), candidate.getFormName(), formOverlayXml, monitor);
                     guard.assertNonEmpty("BaseForm-sync"); //$NON-NLS-1$
+                    // HARD: hollow Form + fat BaseForm must not remain after Update.
+                    assertNoHollowFormFullBaseForm(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName());
                     boolean baseNearParent = isBaseFormNearParentAfterSanitize(extensionProject,
                         candidate.getOwnerName(), candidate.getFormName());
+                    byte[] formAfter = readFormLayerBytes(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), false);
+                    byte[] baseAfter = readFormLayerBytes(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), true);
+                    boolean diskUnchanged = java.util.Arrays.equals(formBefore, formAfter)
+                        && java.util.Arrays.equals(baseBefore, baseAfter);
                     writeParentSyncMarker(extensionProject, candidate.getOwnerName(), candidate.getFormName());
-                    if (!synced)
+                    if (diskUnchanged)
+                        candidate.setMessage("Unchanged (marker only)"); //$NON-NLS-1$
+                    else if (skipParentReason != null && !synced)
+                        candidate.setMessage(
+                            "Updated (skipped parent sync: " + skipParentReason + ")"); //$NON-NLS-1$
+                    else if (formHollow && !synced)
+                        candidate.setMessage("Updated (hollow Form — skipped parent sync)"); //$NON-NLS-1$
+                    else if (!synced)
                         candidate.setMessage("Updated (no parent Form.form sync)"); //$NON-NLS-1$
                     else if (!baseNearParent)
                         candidate.setMessage("Updated (BaseForm partial)"); //$NON-NLS-1$
@@ -261,6 +302,9 @@ public class UpdateFormHandler
                     if (formLayerRebuilds > 0)
                         candidate.setMessage(
                             candidate.getMessage() + "; Form=BaseForm+overlays"); //$NON-NLS-1$
+                    if (formCmdWiring > 0)
+                        candidate.setMessage(
+                            candidate.getMessage() + "; Form command wiring"); //$NON-NLS-1$
                     committed = true;
                     logInfo("Updating candidate finished. Owner: {0}, form: {1}, synced: {2}, formLayer: {3}", //$NON-NLS-1$
                         candidate.getOwnerName(), candidate.getFormName(), Boolean.valueOf(synced),
@@ -878,6 +922,66 @@ public class UpdateFormHandler
     }
 
     /**
+     * When non-null, Update must not copy parent → BaseForm (adapted Form / risky meta).
+     * Hygiene + sync marker still run so the dialog does not eternal-relist.
+     */
+    private String skipBaseFormParentSyncReason(String ownerQualified, String formOverlayXml,
+        IExtensionProject extensionProject, String formName)
+    {
+        if (ExtensionFormLayerRebuilder.isHollow(formOverlayXml))
+            return "hollow Adopted Form"; //$NON-NLS-1$
+        if (ownerQualified != null)
+        {
+            if (ownerQualified.startsWith("Report.") || ownerQualified.startsWith("DataProcessor.")) //$NON-NLS-1$ //$NON-NLS-2$
+                return "Report/DataProcessor (export-safe)"; //$NON-NLS-1$
+        }
+        // Already adapted CFE Form: BaseForm←parent rewrites types/attrs and breaks
+        // 1cedtcli export (FormAttributeWriter NPE). Hygiene + marker only.
+        if (formOverlayXml != null)
+        {
+            if (formOverlayXml.contains("EventHandlerExtension")) //$NON-NLS-1$
+                return "adapted Form (EventHandlerExtension)"; //$NON-NLS-1$
+            if (formOverlayXml.contains("ЦФГ_")) //$NON-NLS-1$
+                return "adapted Form (ЦФГ overlay)"; //$NON-NLS-1$
+        }
+        if (ExtensionFormLayerRebuilder.hasFormItemExtensionTypes(formOverlayXml))
+            return "structural Form*Extension"; //$NON-NLS-1$
+        String baseXml = readFormOverlayXmlFromLayer(extensionProject, ownerQualified, formName, true);
+        if (baseXml != null
+            && ExtensionFormLayerRebuilder.hasStructuralExtensionNames(formOverlayXml, baseXml))
+            return "Form items/attrs beyond BaseForm"; //$NON-NLS-1$
+        return null;
+    }
+
+    private byte[] readFormLayerBytes(IExtensionProject extensionProject, String ownerName, String formName,
+        boolean baseForm)
+    {
+        try
+        {
+            IResource res = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName, baseForm);
+            if (res == null || res.getLocation() == null)
+                return null;
+            Path path = res.getLocation().toFile().toPath();
+            if (!Files.isRegularFile(path))
+                return null;
+            return Files.readAllBytes(path);
+        }
+        catch (Exception e)
+        {
+            return null;
+        }
+    }
+
+    private String readFormOverlayXmlFromLayer(IExtensionProject extensionProject, String ownerName, String formName,
+        boolean baseForm)
+    {
+        byte[] bytes = readFormLayerBytes(extensionProject, ownerName, formName, baseForm);
+        if (bytes == null)
+            return null;
+        return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
      * After id-align + missing-ref strip, BaseForm should match parent once {@code <id>} and
      * unadopted commandName/role/FO are ignored. Large gaps → {@code Updated (BaseForm partial)}.
      */
@@ -1326,8 +1430,83 @@ public class UpdateFormHandler
     }
 
     /**
+     * After Update: Adopted Form must not keep parent-module
+     * {@code FormCommandHandlerContainer} actions; restore {@code Form.Command.*}
+     * on buttons from the pre-Update Form overlay when missing.
+     *
+     * @return 1 when Form was rewritten, 0 otherwise
+     */
+    private int sanitizeAdoptedFormCommandWiring(IExtensionProject extensionProject, String ownerName, String formName,
+        String overlaySourceXml, IProgressMonitor monitor) throws CoreException
+    {
+        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName, false);
+        if (formResource == null || formResource.getLocation() == null)
+            return 0;
+        Path formPath = formResource.getLocation().toFile().toPath();
+        try
+        {
+            if (ExtensionFormLayerRebuilder.sanitizeAdoptedFormCommandWiringFile(formPath, overlaySourceXml))
+            {
+                formResource.refreshLocal(IResource.DEPTH_ZERO, monitor);
+                logWarning("Form command wiring sanitized. Owner: {0}, form: {1}", ownerName, formName); //$NON-NLS-1$
+                return 1;
+            }
+            return 0;
+        }
+        catch (IOException e)
+        {
+            throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                "Form command wiring sanitize failed. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                e.toString()), e));
+        }
+    }
+
+    /**
+     * After writes: Form with {@code <attributes>}=0 and BaseForm with many attrs
+     * crashes {@code 1cedtcli export}. Fail the row so {@link FormWorkspaceGuard}
+     * restores the previous snapshot.
+     */
+    private void assertNoHollowFormFullBaseForm(IExtensionProject extensionProject, String ownerName, String formName)
+        throws CoreException
+    {
+        IResource formResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName, false);
+        IResource baseFormResource = findWorkspaceFormResource(extensionProject.getProject(), ownerName, formName,
+            true);
+        if (formResource == null || formResource.getLocation() == null || baseFormResource == null
+            || baseFormResource.getLocation() == null)
+            return;
+        try
+        {
+            Path formPath = formResource.getLocation().toFile().toPath();
+            Path basePath = baseFormResource.getLocation().toFile().toPath();
+            if (!Files.isRegularFile(formPath) || !Files.isRegularFile(basePath))
+                return;
+            String formXml = Files.readString(formPath);
+            String baseXml = Files.readString(basePath);
+            int formAttrs = ExtensionFormLayerRebuilder.attributeCount(formXml);
+            int baseAttrs = ExtensionFormLayerRebuilder.attributeCount(baseXml);
+            if (formAttrs == 0 && baseAttrs > 5)
+            {
+                throw new CoreException(new Status(IStatus.ERROR, PLUGIN_ID, MessageFormat.format(
+                    "Update left hollow Form + full BaseForm (attrs Form={0}, BaseForm={1}). Owner: {2}, form: {3}", //$NON-NLS-1$
+                    Integer.valueOf(formAttrs), Integer.valueOf(baseAttrs), ownerName, formName)));
+            }
+        }
+        catch (CoreException e)
+        {
+            throw e;
+        }
+        catch (Exception e)
+        {
+            logWarning("Hollow/full assert skipped. Owner: {0}, form: {1}, error: {2}", ownerName, formName, //$NON-NLS-1$
+                e.toString());
+        }
+    }
+
+    /**
      * After BaseForm←parent: set Form = BaseForm + captured EventHandlerExtension /
-     * ЦФГ formCommands / own OnCreate|OnRead (MR-1938). Skips ЦФГ item-overlay forms.
+     * ЦФГ formCommands / own OnCreate|OnRead / item-level ЦФГ handlers (MR-1938).
+     * Skips Form*Extension / structural-name overlays (keep fat).
      *
      * @return 1 when Form was rewritten, 0 when skipped
      */
