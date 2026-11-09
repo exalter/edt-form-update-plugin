@@ -31,7 +31,9 @@ Adopted-форма в расширении = слой **Form** (доработк
    - **пересобирает Form = BaseForm + overlays** (`EventHandlerExtension`,
      ЦФГ `formCommands`, own `OnCreateAtServer`/`OnReadAtServer`) — урок
      MR-1938: handlers-only Form ломает xunit (`Объект`/`ПрименениеУСН`);
-     формы с ЦФГ item-overlay не трогает;
+     **не трогает** Form, если есть `Form*Extension`, item-level ЦФГ handlers
+     или item/attribute `<name>` вне BaseForm (plain `цфг_*` поля — урок
+     мфо_НачислениеРезервов);
    - выравнивает id атрибутов/команд Form → BaseForm (иначе часто segfault
      `compileexttocfe --ibcmd`);
    - вырезает из Form/BaseForm form-level `excludedCommands`, ссылки на
@@ -64,7 +66,7 @@ Mac shortcuts / Form layer плагин уже делает сам с `v20261109
 | Ссылки на команды/роли/ФО не из CFE | `ExtensionMissingRefCleaner` |
 | form-level `excludedCommands` → «Неверное имя команды» | Cleaner после последнего align; HARD fail если остались (`v20261109a+`); regex без `\s*` до EOL (`v20261109b+`) |
 | Mac `<shortcut>Cmd+/Option+` в git CFE | `ExtensionFormShortcutNormalizer` early+final HARD (`v20261109c+`) |
-| handlers-only Form → xunit `Объект`/`ПрименениеУСН` | `ExtensionFormLayerRebuilder`: Form=BaseForm+overlays (`v20261109d+`) |
+| handlers-only Form → xunit `Объект`/`ПрименениеУСН` | `ExtensionFormLayerRebuilder`: Form=BaseForm+overlays (`v20261109d+`); keep fat if names beyond BaseForm (`v20261109e+`) |
 | `commandName` CommonCommand / StandardCommand / orphan `Form.Command` | `ExtensionFormCommandNameCleaner` → `0` |
 | Список снова полный после смены `-data` / ручной чистки | Маркеры в `.metadata/…/parent-sync` + **Accept (no Update)** |
 

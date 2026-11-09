@@ -25,7 +25,13 @@ import java.util.regex.Pattern;
  * <li>plain form-level {@code OnCreateAtServer} / {@code OnReadAtServer} that
  * BaseForm does not already declare (own CFE forms)</li>
  * </ul>
- * Skip when Form has ЦФГ item-level / item-extension overlays (must stay fat).
+ * Skip (keep fat Form, never auto-cut) when Form has:
+ * <ul>
+ * <li>{@code Form*Extension} item types</li>
+ * <li>item-level {@code EventHandlerExtension} / ЦФГ_ handlers</li>
+ * <li>item/attribute {@code <name>} absent from BaseForm (plain ЦФГ fields
+ * like {@code …цфг_СуммаРезерваПени} — lesson мфо_НачислениеРезервов)</li>
+ * </ul>
  */
 final class ExtensionFormLayerRebuilder
 {
@@ -92,6 +98,9 @@ final class ExtensionFormLayerRebuilder
         if (base.isEmpty())
             return Result.skipped("BaseForm empty text"); //$NON-NLS-1$
 
+        if (hasStructuralExtensionNames(oldForm, base))
+            return Result.skipped("keep Form (items/attrs beyond BaseForm)"); //$NON-NLS-1$
+
         List<String> eventExt = formLevelEventHandlerExtensions(oldForm);
         List<String> formCmds = cfgFormCommands(oldForm);
         List<String> plainCreate = plainFormLevelHandlers(oldForm, "OnCreateAtServer"); //$NON-NLS-1$
@@ -152,6 +161,29 @@ final class ExtensionFormLayerRebuilder
             if (attrs != null && attrs.contains("EventHandlerExtension")) //$NON-NLS-1$
                 return true;
             if (body != null && body.contains("ЦФГ_")) //$NON-NLS-1$
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * True when Form declares item/attribute names that BaseForm does not.
+     * Those are extension overlays (often plain {@code цфг_*} fields without
+     * {@code FormFieldExtension}). Rebuilding Form:=BaseForm would drop them.
+     */
+    static boolean hasStructuralExtensionNames(String form, String base)
+    {
+        if (form == null || base == null || form.isEmpty() || base.isEmpty())
+            return false;
+        Matcher m = Pattern.compile("<name>([^<]+)</name>").matcher(form); //$NON-NLS-1$
+        while (m.find())
+        {
+            if (!nestedUnderItems(form, m.start()) && !nestedUnderAttributes(form, m.start()))
+                continue;
+            String name = m.group(1);
+            if (name == null || name.isEmpty())
+                continue;
+            if (!base.contains("<name>" + name + "</name>")) //$NON-NLS-1$ //$NON-NLS-2$
                 return true;
         }
         return false;
@@ -286,6 +318,12 @@ final class ExtensionFormLayerRebuilder
     {
         String before = text.substring(Math.max(0, start - 500), start);
         return before.lastIndexOf("<items") > before.lastIndexOf("</items>"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+
+    private static boolean nestedUnderAttributes(String text, int start)
+    {
+        String before = text.substring(Math.max(0, start - 500), start);
+        return before.lastIndexOf("<attributes") > before.lastIndexOf("</attributes>"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
     private static boolean nestedUnderExtInfo(String text, int start)
