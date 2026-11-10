@@ -1,3 +1,10 @@
+## 1.0.2.v20261109i — skip parent sync = no disk writes
+
+When BaseForm←parent is skipped (hollow / adapted ЦФГ / Report / structural),
+Update writes **only** the sync marker. No Form rebuild, no strip missing refs /
+excludedCommands / commandName / shortcuts. Status: `Unchanged (marker only: …)`.
+Fixes mass Update still dumping the same sanitize diff into git after v20261109h.
+
 ## 1.0.2.v20261109h — adapted forms: no silent rewrite / no export break
 
 Operator expectation: after forms are already adapted, **Update must not

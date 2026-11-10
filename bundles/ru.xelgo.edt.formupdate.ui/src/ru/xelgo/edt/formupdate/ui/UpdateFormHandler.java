@@ -201,15 +201,22 @@ public class UpdateFormHandler
                         formOverlayXml, extensionProject, candidate.getFormName());
                     if (skipParentReason != null)
                     {
+                        // Adapted / hollow / Report: marker only — no rebuild, no sanitize writes.
+                        // Previous jars still stripped refs/excludedCommands and polluted git.
                         logWarning(
-                            "Skipped BaseForm←parent ({0}). Owner: {1}, form: {2}", //$NON-NLS-1$
+                            "Skipped BaseForm←parent and hygiene writes ({0}). Owner: {1}, form: {2}", //$NON-NLS-1$
                             skipParentReason, candidate.getOwnerName(), candidate.getFormName());
+                        writeParentSyncMarker(extensionProject, candidate.getOwnerName(),
+                            candidate.getFormName());
+                        candidate.setMessage("Unchanged (marker only: " + skipParentReason + ")"); //$NON-NLS-1$
+                        committed = true;
+                        logInfo(
+                            "Updating candidate finished (marker only). Owner: {0}, form: {1}, reason: {2}", //$NON-NLS-1$
+                            candidate.getOwnerName(), candidate.getFormName(), skipParentReason);
+                        return;
                     }
-                    else
-                    {
-                        synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
-                            candidate.getFormName(), monitor);
-                    }
+                    synced = syncBaseFormFromParentFile(extensionProject, candidate.getOwnerName(),
+                        candidate.getFormName(), monitor);
                     // Rebuild Form = BaseForm + EventHandlerExtension / ЦФГ formCommands /
                     // own OnCreate|OnRead / item-level ЦФГ handlers. If Form was hollow and
                     // BaseForm already full (stale bad sync), rebuild aligns Form without
